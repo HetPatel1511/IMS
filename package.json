@@ -1,0 +1,19 @@
+{
+  "name": "inventory-management-system",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @ims/api --filter @ims/web run dev",
+    "dev:api": "pnpm --filter @ims/api dev",
+    "dev:web": "pnpm --filter @ims/web dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "db:generate": "pnpm --filter @ims/api prisma:generate",
+    "db:migrate": "pnpm --filter @ims/api prisma:migrate",
+    "db:seed": "pnpm --filter @ims/api prisma:seed"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

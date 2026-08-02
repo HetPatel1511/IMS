@@ -1,0 +1,326 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  VIEWER
+}
+
+enum FieldType {
+  TEXT
+  LONG_TEXT
+  NUMBER
+  DECIMAL
+  BOOLEAN
+  DATE
+  DATETIME
+  EMAIL
+  PHONE
+  URL
+  DROPDOWN
+  MULTI_SELECT
+  RADIO
+  CHECKBOX
+  COLOR
+  FILE
+  IMAGE
+  CURRENCY
+  BARCODE
+  QR_CODE
+  RELATIONSHIP
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+}
+
+enum StockTransactionType {
+  PURCHASE
+  SALE
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String
+  passwordHash String    @map("password_hash")
+  fullName     String    @map("full_name")
+  role         UserRole  @default(VIEWER)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  auditLogs       AuditLog[]
+  filesUploaded   FileObject[]      @relation("FileUploader")
+  itemsCreated    InventoryItem[]   @relation("ItemCreator")
+  itemsUpdated    InventoryItem[]   @relation("ItemUpdater")
+  settingsUpdated Setting[]
+  stockTransactions StockTransaction[]
+
+  @@unique([email])
+  @@map("users")
+}
+
+model Setting {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  value       Json     @default("{}")
+  description String?
+  updatedById String?  @map("updated_by") @db.Uuid
+  updatedBy   User?    @relation(fields: [updatedById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("settings")
+}
+
+model InventoryType {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        String
+  name        String
+  description String?
+  sortOrder   Int       @default(0) @map("sort_order")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  fields   FieldDefinition[]
+  categories Category[]
+  items    InventoryItem[]
+  stockTransactions StockTransaction[]
+
+  @@unique([code])
+  @@map("inventory_types")
+}
+
+model FieldDefinition {
+  id              String    @id @default(uuid()) @db.Uuid
+  inventoryTypeId String    @map("inventory_type_id") @db.Uuid
+  inventoryType   InventoryType @relation(fields: [inventoryTypeId], references: [id])
+  key             String
+  displayName     String    @map("display_name")
+  description     String?
+  fieldType       FieldType @map("field_type")
+  isRequired      Boolean   @default(false) @map("is_required")
+  isUnique        Boolean   @default(false) @map("is_unique")
+  defaultValue    Json?     @map("default_value")
+  validation      Json      @default("{}")
+  ui              Json      @default("{}")
+  sortOrder       Int       @default(0) @map("sort_order")
+  isVisible       Boolean   @default(true) @map("is_visible")
+  isFilterable    Boolean   @default(false) @map("is_filterable")
+  isSearchable    Boolean   @default(false) @map("is_searchable")
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  options FieldOption[]
+
+  @@unique([inventoryTypeId, key])
+  @@index([inventoryTypeId, sortOrder])
+  @@map("field_definitions")
+}
+
+model FieldOption {
+  id                String   @id @default(uuid()) @db.Uuid
+  fieldDefinitionId String   @map("field_definition_id") @db.Uuid
+  fieldDefinition   FieldDefinition @relation(fields: [fieldDefinitionId], references: [id], onDelete: Cascade)
+  value             String
+  label             String
+  sortOrder         Int      @default(0) @map("sort_order")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([fieldDefinitionId, value])
+  @@map("field_options")
+}
+
+model Category {
+  id              String    @id @default(uuid()) @db.Uuid
+  inventoryTypeId String    @map("inventory_type_id") @db.Uuid
+  inventoryType   InventoryType @relation(fields: [inventoryTypeId], references: [id])
+  parentId        String?   @map("parent_id") @db.Uuid
+  parent          Category? @relation("CategoryTree", fields: [parentId], references: [id])
+  children        Category[] @relation("CategoryTree")
+  code            String
+  name            String
+  description     String?
+  sortOrder       Int       @default(0) @map("sort_order")
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  items InventoryItem[]
+
+  @@unique([inventoryTypeId, code])
+  @@index([inventoryTypeId, parentId])
+  @@map("categories")
+}
+
+model Supplier {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        String
+  name        String
+  contactName String?   @map("contact_name")
+  email       String?
+  phone       String?
+  address     String?
+  notes       String?
+  metadata    Json      @default("{}")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  items InventoryItemSupplier[]
+  purchases StockTransaction[]
+
+  @@unique([code])
+  @@map("suppliers")
+}
+
+model Buyer {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        String
+  name        String
+  contactName String?   @map("contact_name")
+  email       String?
+  phone       String?
+  address     String?
+  notes       String?
+  metadata    Json      @default("{}")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  sales StockTransaction[]
+
+  @@unique([code])
+  @@map("buyers")
+}
+
+model FileObject {
+  id           String   @id @default(uuid()) @db.Uuid
+  storageKey   String   @unique @map("storage_key")
+  originalName String   @map("original_name")
+  mimeType     String   @map("mime_type")
+  sizeBytes    BigInt   @map("size_bytes")
+  uploadedById String?  @map("uploaded_by") @db.Uuid
+  uploadedBy   User?    @relation("FileUploader", fields: [uploadedById], references: [id])
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("files")
+}
+
+model InventoryItem {
+  id              String    @id @default(uuid()) @db.Uuid
+  inventoryTypeId String    @map("inventory_type_id") @db.Uuid
+  inventoryType   InventoryType @relation(fields: [inventoryTypeId], references: [id])
+  categoryId      String?   @map("category_id") @db.Uuid
+  category        Category? @relation(fields: [categoryId], references: [id])
+  sku             String
+  name            String
+  description     String?
+  quantity        Decimal   @default(0) @db.Decimal(18, 4)
+  minQuantity     Decimal   @default(0) @map("min_quantity") @db.Decimal(18, 4)
+  unit            String?
+  isActive        Boolean   @default(true) @map("is_active")
+  attributes      Json      @default("{}")
+  createdById     String?   @map("created_by") @db.Uuid
+  createdBy       User?     @relation("ItemCreator", fields: [createdById], references: [id])
+  updatedById     String?   @map("updated_by") @db.Uuid
+  updatedBy       User?     @relation("ItemUpdater", fields: [updatedById], references: [id])
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  suppliers InventoryItemSupplier[]
+  stockTransactions StockTransaction[]
+
+  @@unique([inventoryTypeId, sku])
+  @@index([inventoryTypeId])
+  @@index([categoryId])
+  @@map("inventory_items")
+}
+
+model InventoryItemSupplier {
+  inventoryItemId String   @map("inventory_item_id") @db.Uuid
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  supplierId      String   @map("supplier_id") @db.Uuid
+  supplier        Supplier @relation(fields: [supplierId], references: [id])
+  isPreferred     Boolean  @default(false) @map("is_preferred")
+  supplierSku     String?  @map("supplier_sku")
+  leadTimeDays    Int?     @map("lead_time_days")
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([inventoryItemId, supplierId])
+  @@index([supplierId])
+  @@map("inventory_item_suppliers")
+}
+
+model StockTransaction {
+  id                String               @id @default(uuid()) @db.Uuid
+  type              StockTransactionType
+  inventoryItemId   String               @map("inventory_item_id") @db.Uuid
+  inventoryItem     InventoryItem        @relation(fields: [inventoryItemId], references: [id])
+  inventoryTypeId   String               @map("inventory_type_id") @db.Uuid
+  inventoryType     InventoryType        @relation(fields: [inventoryTypeId], references: [id])
+  quantity          Decimal              @db.Decimal(18, 4)
+  quantityBefore    Decimal              @map("quantity_before") @db.Decimal(18, 4)
+  quantityAfter     Decimal              @map("quantity_after") @db.Decimal(18, 4)
+  supplierId        String?              @map("supplier_id") @db.Uuid
+  supplier          Supplier?            @relation(fields: [supplierId], references: [id])
+  buyerId           String?              @map("buyer_id") @db.Uuid
+  buyer             Buyer?               @relation(fields: [buyerId], references: [id])
+  unitPrice         Decimal?             @map("unit_price") @db.Decimal(18, 4)
+  notes             String?
+  createdById       String?              @map("created_by") @db.Uuid
+  createdBy         User?                @relation(fields: [createdById], references: [id])
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
+  @@index([inventoryItemId, createdAt(sort: Desc)])
+  @@index([inventoryTypeId, createdAt(sort: Desc)])
+  @@index([supplierId, createdAt(sort: Desc)])
+  @@index([buyerId, createdAt(sort: Desc)])
+  @@index([quantity])
+  @@map("stock_transactions")
+}
+
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  actorId    String?     @map("actor_id") @db.Uuid
+  actor      User?       @relation(fields: [actorId], references: [id])
+  action     AuditAction
+  entityType String      @map("entity_type")
+  entityId   String      @map("entity_id") @db.Uuid
+  summary    String?
+  beforeData Json?       @map("before_data")
+  afterData  Json?       @map("after_data")
+  requestId  String?     @map("request_id")
+  ipAddress  String?     @map("ip_address")
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
