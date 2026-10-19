@@ -1,6 +1,9 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query';
 import { AuthProvider } from '../shared/auth';
+import { ToastProvider, emitToast } from '../shared/toast';
+import { toErrorMessage } from '../shared/api';
+import { ConfirmProvider } from '../shared/confirm';
 import { AppLayout } from './AppLayout';
 import { LoginPage } from '../features/auth/LoginPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
@@ -11,11 +14,24 @@ import { SettingsPage } from '../features/settings/SettingsPage';
 import { AuditPage } from '../features/audit/AuditPage';
 import { StockPage } from '../features/stock/StockPage';
 
-const queryClient = new QueryClient();
+let lastQueryErrorAt = 0;
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error) => {
+      // Dedupe bursts of query failures into a single toast.
+      const now = Date.now();
+      if (now - lastQueryErrorAt < 1500) return;
+      lastQueryErrorAt = now;
+      emitToast('error', toErrorMessage(error));
+    },
+  }),
+});
 
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <ToastProvider>
+      <ConfirmProvider>
       <AuthProvider>
         <BrowserRouter>
           <Routes>
@@ -34,6 +50,8 @@ export function App() {
           </Routes>
         </BrowserRouter>
       </AuthProvider>
+      </ConfirmProvider>
+      </ToastProvider>
     </QueryClientProvider>
   );
 }

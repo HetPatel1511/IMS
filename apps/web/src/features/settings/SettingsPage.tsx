@@ -1,6 +1,9 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../shared/api';
+import { hasMinRole, type UserRole } from '@ims/shared';
+import { api, toErrorMessage } from '../../shared/api';
+import { useToast } from '../../shared/toast';
+import { useAuth } from '../../shared/auth';
 
 type Setting = {
   id: string;
@@ -11,6 +14,9 @@ type Setting = {
 
 export function SettingsPage() {
   const qc = useQueryClient();
+  const toast = useToast();
+  const { user } = useAuth();
+  const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
   const [orgName, setOrgName] = useState('');
   const [defaultUnit, setDefaultUnit] = useState('pcs');
 
@@ -36,7 +42,11 @@ export function SettingsPage() {
           value: { name: orgName, defaultUnit, locale: 'en-IN' },
         }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      toast.success('Settings saved');
+    },
+    onError: (e) => toast.error(toErrorMessage(e)),
   });
 
   function onSubmit(e: FormEvent) {
@@ -65,15 +75,51 @@ export function SettingsPage() {
             onChange={(e) => setDefaultUnit(e.target.value)}
           />
         </label>
-        <div className="row actions">
-          <button className="btn" type="submit">
-            Save
-          </button>
-        </div>
+        {canWrite ? (
+          <div className="row actions">
+            <button className="btn" type="submit" disabled={save.isPending}>
+              Save
+            </button>
+          </div>
+        ) : (
+          <p className="muted">You need admin access to change settings.</p>
+        )}
       </form>
       <div className="card stack">
         <h3 className="page-title">All settings</h3>
-        <pre className="pre-wrap">{JSON.stringify(settings.data ?? [], null, 2)}</pre>
+        <div className="table-wrap">
+          <table className="table compact">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Value</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(settings.data ?? []).map((row) => (
+                <tr key={row.id}>
+                  <td>{row.key}</td>
+                  <td>
+                    {Object.entries(row.value ?? {}).map(([k, v]) => (
+                      <div key={k}>
+                        <span className="muted">{k}:</span> {String(v)}
+                      </div>
+                    ))}
+                  </td>
+                  <td className="muted">{row.description ?? '—'}</td>
+                </tr>
+              ))}
+              {settings.data && settings.data.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="muted">
+                    No settings yet.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

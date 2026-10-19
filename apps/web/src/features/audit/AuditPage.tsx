@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../../shared/api';
+import { api, toErrorMessage } from '../../shared/api';
+import { SkeletonRows } from '../../shared/Skeleton';
 
 type AuditRow = {
   id: string;
@@ -17,8 +18,7 @@ export function AuditPage() {
     queryFn: async () => (await api<AuditRow[]>('/audit-logs?pageSize=50')).data,
   });
 
-  if (isLoading) return <p className="muted">Loading audit log…</p>;
-  if (error) return <p className="error">{(error as Error).message}</p>;
+  if (error) return <p className="error">{toErrorMessage(error)}</p>;
 
   return (
     <div className="stack">
@@ -41,20 +41,31 @@ export function AuditPage() {
               </tr>
             </thead>
             <tbody>
-              {(data ?? []).map((row) => (
-                <tr key={row.id}>
-                  <td>{new Date(row.createdAt).toLocaleString()}</td>
-                  <td>{row.actor?.fullName ?? '—'}</td>
-                  <td>{row.action}</td>
-                  <td>
-                    <span className="cell-stack">
-                      {row.entityType}
-                      <span className="muted entity-id">{row.entityId}</span>
-                    </span>
+              {isLoading ? (
+                <SkeletonRows rows={6} cols={5} />
+              ) : (
+                (data ?? []).map((row) => (
+                  <tr key={row.id}>
+                    <td>{new Date(row.createdAt).toLocaleString()}</td>
+                    <td>{row.actor?.fullName ?? '—'}</td>
+                    <td>{row.action}</td>
+                    <td>
+                      <span className="cell-stack">
+                        {row.entityType}
+                        <span className="muted entity-id">{row.entityId}</span>
+                      </span>
+                    </td>
+                    <td>{row.summary ?? '—'}</td>
+                  </tr>
+                ))
+              )}
+              {!isLoading && (data ?? []).length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="muted">
+                    No audit entries yet.
                   </td>
-                  <td>{row.summary ?? '—'}</td>
                 </tr>
-              ))}
+              ) : null}
             </tbody>
           </table>
         </div>

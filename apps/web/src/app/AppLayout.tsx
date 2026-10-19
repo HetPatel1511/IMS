@@ -1,11 +1,27 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, Navigate, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../shared/auth';
+import { api } from '../shared/api';
+import { setFormatConfig } from '../shared/format';
+
+type OrgSetting = { key: string; value: { locale?: string; defaultUnit?: string } };
 
 export function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user, loading, logout } = useAuth();
   const location = useLocation();
   const [navOpen, setNavOpen] = useState(false);
+
+  // Configure app-wide number/locale formatting from org settings.
+  const settings = useQuery({
+    queryKey: ['settings'],
+    enabled: Boolean(user),
+    queryFn: async () => (await api<OrgSetting[]>('/settings')).data,
+  });
+  useEffect(() => {
+    const org = settings.data?.find((s) => s.key === 'org');
+    if (org?.value?.locale) setFormatConfig({ locale: org.value.locale });
+  }, [settings.data]);
 
   useEffect(() => {
     setNavOpen(false);
@@ -23,6 +39,15 @@ export function AppLayout() {
       window.removeEventListener('keydown', onKey);
     };
   }, [navOpen]);
+
+  if (loading) {
+    return (
+      <div className="app-loading" role="status" aria-live="polite">
+        <span className="spinner" aria-hidden />
+        <span>Loading…</span>
+      </div>
+    );
+  }
 
   if (!user) return <Navigate to="/login" replace />;
 

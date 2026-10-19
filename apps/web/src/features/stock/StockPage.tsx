@@ -1,6 +1,12 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../shared/api';
+import { hasMinRole, type UserRole } from '@ims/shared';
+import { api, toErrorMessage } from '../../shared/api';
+import { useToast } from '../../shared/toast';
+import { useAuth } from '../../shared/auth';
+import { SkeletonRows } from '../../shared/Skeleton';
+import { formatNumber } from '../../shared/format';
+import { useSearchParams } from 'react-router-dom';
 
 type Party = { id: string; code: string; name: string };
 type InventoryType = { id: string; code: string; name: string };
@@ -52,17 +58,32 @@ const emptyFilters: Filters = {
   q: '',
 };
 
-function formatNum(value: unknown) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return String(value ?? '—');
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(n);
+const formatNum = formatNumber;
+
+function filtersFromParams(sp: URLSearchParams): Filters {
+  const f = { ...emptyFilters };
+  for (const key of Object.keys(emptyFilters) as (keyof Filters)[]) {
+    const v = sp.get(key);
+    if (v != null) (f[key] as string) = v;
+  }
+  return f;
+}
+
+function paramsFromFilters(f: Filters): URLSearchParams {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) if (v) sp.set(k, v);
+  return sp;
 }
 
 export function StockPage() {
   const qc = useQueryClient();
+  const toast = useToast();
+  const { user } = useAuth();
+  const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [mode, setMode] = useState<'buy' | 'sell'>('buy');
-  const [filters, setFilters] = useState<Filters>(emptyFilters);
-  const [applied, setApplied] = useState<Filters>(emptyFilters);
+  const [filters, setFilters] = useState<Filters>(() => filtersFromParams(searchParams));
+  const [applied, setApplied] = useState<Filters>(() => filtersFromParams(searchParams));
   const [form, setForm] = useState({
     inventoryItemId: '',
     partyId: '',
@@ -133,6 +154,7 @@ export function StockPage() {
       qc.invalidateQueries({ queryKey: ['stock-transactions'] });
       qc.invalidateQueries({ queryKey: ['items'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      toast.success(mode === 'buy' ? 'Purchase recorded' : 'Sale recorded');
       setForm({
         inventoryItemId: '',
         partyId: '',
@@ -141,6 +163,7 @@ export function StockPage() {
         notes: '',
       });
     },
+    onError: (e) => toast.error(toErrorMessage(e)),
   });
 
   function onSubmit(e: FormEvent) {
@@ -151,6 +174,7 @@ export function StockPage() {
   function applyFilters(e: FormEvent) {
     e.preventDefault();
     setApplied({ ...filters });
+    setSearchParams(paramsFromFilters(filters), { replace: true });
   }
 
   const filteredItemsForForm = useMemo(() => {
@@ -172,6 +196,7 @@ export function StockPage() {
         </div>
       </div>
 
+      {canWrite ? (
       <div className="card stack">
         <div className="row">
           <button
@@ -272,7 +297,7 @@ export function StockPage() {
           ) : null}
 
           {mutate.isError ? (
-            <div className="error label-span">{(mutate.error as Error).message}</div>
+            <div className="error label-span">{toErrorMessage(mutate.error)}</div>
           ) : null}
 
           <div className="row actions label-span">
@@ -282,6 +307,7 @@ export function StockPage() {
           </div>
         </form>
       </div>
+      ) : null}
 
       <div className="card stack">
         <h3 className="page-title">Transaction logs</h3>
@@ -427,6 +453,7 @@ export function StockPage() {
               onClick={() => {
                 setFilters(emptyFilters);
                 setApplied(emptyFilters);
+                setSearchParams(new URLSearchParams(), { replace: true });
               }}
             >
               Clear
@@ -436,7 +463,7 @@ export function StockPage() {
 
         {txQuery.isLoading ? <p className="muted">Loading transactions…</p> : null}
         {txQuery.isError ? (
-          <p className="error">{(txQuery.error as Error).message}</p>
+          <p className="error">{toErrorMessage(txQuery.error)}</p>
         ) : null}
 
         <div className="table-wrap">
@@ -451,10 +478,12 @@ export function StockPage() {
                 <th>Qty</th>
                 <th>Before</th>
                 <th>After</th>
+                <th>Value</th>
                 <th>By</th>
               </tr>
             </thead>
             <tbody>
+              {txQuery.isLoading ? <SkeletonRows rows={6} cols={10} /> : null}
               {(txQuery.data?.data ?? []).map((row) => (
                 <tr key={row.id}>
                   <td className="num">{new Date(row.createdAt).toLocaleString()}</td>
@@ -474,12 +503,17 @@ export function StockPage() {
                   <td className="num">{formatNum(row.quantity)}</td>
                   <td className="num">{formatNum(row.quantityBefore)}</td>
                   <td className="num">{formatNum(row.quantityAfter)}</td>
+                  <td className="num">
+                    {row.unitPrice != null && row.unitPrice !== ''
+                      ? formatNum(Number(row.quantity) * Number(row.unitPrice))
+                      : '—'}
+                  </td>
                   <td>{row.createdBy?.fullName ?? '—'}</td>
                 </tr>
               ))}
               {!txQuery.isLoading && !(txQuery.data?.data?.length ?? 0) ? (
                 <tr>
-                  <td colSpan={9} className="muted">
+                  <td colSpan={10} className="muted">
                     No transactions match these filters.
                   </td>
                 </tr>

@@ -1,6 +1,11 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../shared/api';
+import { hasMinRole, type UserRole } from '@ims/shared';
+import { api, toErrorMessage } from '../../shared/api';
+import { useToast } from '../../shared/toast';
+import { useConfirm } from '../../shared/confirm';
+import { useAuth } from '../../shared/auth';
+import { SkeletonRows } from '../../shared/Skeleton';
 
 type Party = {
   id: string;
@@ -11,6 +16,8 @@ type Party = {
   isActive: boolean;
 };
 
+const emptyForm = { code: '', name: '', email: '', phone: '' };
+
 function PartyPage({
   title,
   resource,
@@ -19,26 +26,59 @@ function PartyPage({
   resource: 'suppliers' | 'buyers';
 }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({ code: '', name: '', email: '', phone: '' });
+  const toast = useToast();
+  const confirm = useConfirm();
+  const { user } = useAuth();
+  const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
+  const [form, setForm] = useState({ ...emptyForm });
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const list = useQuery({
     queryKey: [resource],
     queryFn: async () => (await api<Party[]>(`/${resource}?pageSize=100`)).data,
   });
 
-  const create = useMutation({
-    mutationFn: async () =>
-      api(`/${resource}`, { method: 'POST', body: JSON.stringify(form) }),
+  const reset = () => {
+    setForm({ ...emptyForm });
+    setEditingId(null);
+  };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const body = JSON.stringify({
+        code: form.code,
+        name: form.name,
+        email: form.email || null,
+        phone: form.phone || null,
+      });
+      return editingId
+        ? api(`/${resource}/${editingId}`, { method: 'PATCH', body })
+        : api(`/${resource}`, { method: 'POST', body });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [resource] });
-      setForm({ code: '', name: '', email: '', phone: '' });
+      toast.success(editingId ? `${title} updated` : `${title} added`);
+      reset();
     },
+    onError: (e) => toast.error(toErrorMessage(e)),
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) => api(`/${resource}/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [resource] });
+      toast.success('Removed');
+      if (editingId) reset();
+    },
+    onError: (e) => toast.error(toErrorMessage(e)),
   });
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    create.mutate();
+    save.mutate();
   }
+
+  const rows = list.data ?? [];
 
   return (
     <div className="stack">
@@ -48,49 +88,62 @@ function PartyPage({
           <p className="muted">Master data for catalog relationships.</p>
         </div>
       </div>
+      {canWrite ? (
       <div className="card stack">
         <form className="grid cols-2" onSubmit={onSubmit}>
-          <label className="label">
+          <label className="label" htmlFor="party-code">
             Code
             <input
+              id="party-code"
               className="input"
               value={form.code}
               onChange={(e) => setForm({ ...form, code: e.target.value })}
               required
             />
           </label>
-          <label className="label">
+          <label className="label" htmlFor="party-name">
             Name
             <input
+              id="party-name"
               className="input"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               required
             />
           </label>
-          <label className="label">
+          <label className="label" htmlFor="party-email">
             Email
             <input
+              id="party-email"
               className="input"
+              type="email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
             />
           </label>
-          <label className="label">
+          <label className="label" htmlFor="party-phone">
             Phone
             <input
+              id="party-phone"
               className="input"
+              type="tel"
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
             />
           </label>
           <div className="row actions">
-            <button className="btn" type="submit">
-              Add
+            <button className="btn" type="submit" disabled={save.isPending}>
+              {editingId ? 'Save changes' : 'Add'}
             </button>
+            {editingId ? (
+              <button type="button" className="btn secondary" onClick={reset}>
+                Cancel
+              </button>
+            ) : null}
           </div>
         </form>
       </div>
+      ) : null}
       <div className="card">
         <div className="table-wrap">
           <table className="table">
@@ -100,17 +153,62 @@ function PartyPage({
                 <th>Name</th>
                 <th>Email</th>
                 <th>Phone</th>
+                <th />
               </tr>
             </thead>
             <tbody>
-              {(list.data ?? []).map((row) => (
+              {list.isLoading ? <SkeletonRows rows={4} cols={5} /> : null}
+              {rows.map((row) => (
                 <tr key={row.id}>
                   <td>{row.code}</td>
                   <td>{row.name}</td>
                   <td>{row.email ?? '—'}</td>
                   <td>{row.phone ?? '—'}</td>
+                  <td>
+                    {canWrite ? (
+                    <div className="row">
+                      <button
+                        type="button"
+                        className="btn secondary"
+                        onClick={() => {
+                          setEditingId(row.id);
+                          setForm({
+                            code: row.code,
+                            name: row.name,
+                            email: row.email ?? '',
+                            phone: row.phone ?? '',
+                          });
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="btn secondary"
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: `Delete ${title.toLowerCase().replace(/s$/, '')}`,
+                            message: `Delete "${row.name}"? This cannot be undone.`,
+                            confirmLabel: 'Delete',
+                            danger: true,
+                          });
+                          if (ok) remove.mutate(row.id);
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
+              {!list.isLoading && rows.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="muted">
+                    No {title.toLowerCase()} yet — add your first above.
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>

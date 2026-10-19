@@ -117,6 +117,15 @@ export function buildAttributesSchema(
     if (!field.isRequired) {
       schema = schema.optional().nullable();
     }
+    // Apply defaults so required fields can be satisfied without the client
+    // echoing every value. Checkboxes in particular only emit a value when
+    // toggled, so a missing required boolean defaults to false.
+    const hasDefault = field.defaultValue !== undefined && field.defaultValue !== null;
+    if (hasDefault) {
+      schema = schema.default(field.defaultValue as never);
+    } else if (field.fieldType === 'BOOLEAN' || field.fieldType === 'CHECKBOX') {
+      schema = schema.default(false as never);
+    }
     shape[field.key] = schema;
   }
 

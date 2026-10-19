@@ -67,7 +67,9 @@ export class DynamicFieldsService {
     });
     if (existing) throw new ConflictError('Field key already exists for this type');
 
-    const created = await this.prisma.fieldDefinition.create({
+    let created;
+    try {
+      created = await this.prisma.fieldDefinition.create({
       data: {
         inventoryTypeId,
         key: dto.key,
@@ -95,7 +97,13 @@ export class DynamicFieldsService {
           : undefined,
       },
       include: { options: true },
-    });
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictError('Field key already exists for this type');
+      }
+      throw err;
+    }
 
     await this.invalidateSchema(inventoryTypeId);
     await this.audit.log({

@@ -35,4 +35,34 @@ if (!parsed.success) {
   process.exit(1);
 }
 
+// A required checkbox that the client never toggled (missing) defaults to false.
+const boolFields = [
+  { key: 'certified', displayName: 'Certified', fieldType: 'CHECKBOX' as const, isRequired: true },
+];
+const boolMissing = validateAttributes(boolFields, {});
+if (!boolMissing.success) {
+  console.error('Expected required checkbox to default to false', boolMissing);
+  process.exit(1);
+}
+if (boolMissing.data.certified !== false) {
+  console.error('Expected certified default false, got', boolMissing.data.certified);
+  process.exit(1);
+}
+
+// An explicit field defaultValue is applied when the attribute is missing.
+const defaultedFields = [
+  {
+    key: 'unit',
+    displayName: 'Unit',
+    fieldType: 'TEXT' as const,
+    isRequired: true,
+    defaultValue: 'kg',
+  },
+];
+const defaulted = validateAttributes(defaultedFields, {});
+if (!defaulted.success || defaulted.data.unit !== 'kg') {
+  console.error('Expected default value to be applied', defaulted);
+  process.exit(1);
+}
+
 console.log('dynamic-validation tests passed');
