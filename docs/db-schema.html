@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IMS Database Schema</title>
+<style>
+  :root {
+    --bg: #f3efe6;
+    --panel: #faf7f0;
+    --ink: #1c241c;
+    --muted: #5c6b5c;
+    --line: #d5d0c4;
+    --accent: #2f6b4f;
+    --accent-soft: rgba(47, 107, 79, 0.12);
+    --pk: #8a6a1f;
+    --fk: #2f6b4f;
+    --uniq: #7a4ea8;
+    --edge: #9aa79a;
+    --edge-hi: #2f6b4f;
+    --card-shadow: 0 10px 30px rgba(28, 36, 28, 0.10);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11160f; --panel: #19200f3b; --panel: #1b2219; --ink: #e8ece3;
+      --muted: #9aa995; --line: #333c30; --accent: #6fcf97; --accent-soft: rgba(111,207,151,0.14);
+      --pk: #e2b357; --fk: #6fcf97; --uniq: #c9a7f0; --edge: #4a554542; --edge: #46514444;
+      --edge: #4b564a; --edge-hi: #6fcf97; --card-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #11160f; --panel: #1b2219; --ink: #e8ece3; --muted: #9aa995; --line: #333c30;
+    --accent: #6fcf97; --accent-soft: rgba(111,207,151,0.14); --pk: #e2b357; --fk: #6fcf97;
+    --uniq: #c9a7f0; --edge: #4b564a; --edge-hi: #6fcf97; --card-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 16px; background: color-mix(in srgb, var(--panel) 88%, transparent);
+    border-bottom: 1px solid var(--line); backdrop-filter: blur(8px);
+  }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .3px; white-space: nowrap; }
+  header .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .spacer { flex: 1 1 auto; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input[type="search"] {
+    font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-width: 160px;
+  }
+  button {
+    font: inherit; font-size: 12.5px; padding: 6px 11px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  #stage { position: absolute; inset: 0; top: 0; overflow: hidden; cursor: grab; }
+  #stage.panning { cursor: grabbing; }
+  #world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  svg#edges { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
+
+  .table {
+    position: absolute; width: 230px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: var(--card-shadow); user-select: none;
+    transition: box-shadow .15s, border-color .15s, opacity .15s;
+  }
+  .table.dim { opacity: 0.25; }
+  .table.hi { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--card-shadow); }
+  .thead {
+    display: flex; align-items: center; gap: 8px; padding: 9px 11px; cursor: grab;
+    border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, var(--panel)), var(--panel));
+  }
+  .thead .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
+  .thead h2 { margin: 0; font-size: 13.5px; font-weight: 650; }
+  .thead .cnt { margin-left: auto; font-size: 11px; color: var(--muted); }
+  .cols { list-style: none; margin: 0; padding: 4px 0; max-height: 320px; overflow: auto; }
+  .cols li {
+    display: flex; align-items: center; gap: 6px; padding: 3px 11px; font-size: 12px; line-height: 1.5;
+  }
+  .cols li .name { font-weight: 550; }
+  .cols li .type { margin-left: auto; color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+  .badge {
+    font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 5px; letter-spacing: .4px;
+    border: 1px solid currentColor;
+  }
+  .badge.pk { color: var(--pk); } .badge.fk { color: var(--fk); } .badge.u { color: var(--uniq); }
+  .nullable .name { color: var(--muted); font-weight: 500; }
+
+  .legend {
+    position: fixed; left: 16px; bottom: 16px; z-index: 10; background: color-mix(in srgb, var(--panel) 92%, transparent);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 11.5px; color: var(--muted);
+    max-width: 280px; backdrop-filter: blur(8px);
+  }
+  .legend b { color: var(--ink); }
+  .legend .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 5px; }
+  .legend .k { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 18px; height: 3px; border-radius: 2px; background: var(--edge); display: inline-block; }
+  .swatch.self { background: var(--pk); }
+
+  .enums {
+    position: fixed; right: 16px; bottom: 16px; z-index: 10; background: color-mix(in srgb, var(--panel) 92%, transparent);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 11px; color: var(--muted);
+    max-width: 300px; backdrop-filter: blur(8px); max-height: 46vh; overflow: auto;
+  }
+  .enums h3 { margin: 0 0 6px; font-size: 12px; color: var(--ink); }
+  .enums .en { margin-bottom: 6px; }
+  .enums .en b { color: var(--accent); }
+  .enums code { font-family: ui-monospace, monospace; }
+  .hint { font-size: 11px; color: var(--muted); }
+
+  svg#edges path.hit { pointer-events: stroke; cursor: help; }
+  #tooltip {
+    position: fixed; z-index: 30; pointer-events: none; opacity: 0;
+    transform: translate(-50%, calc(-100% - 12px)); transition: opacity .1s;
+    background: var(--ink); color: var(--bg);
+    border-radius: 8px; padding: 7px 10px; font-size: 12px; line-height: 1.5;
+    box-shadow: 0 8px 24px rgba(0,0,0,.28);
+    width: max-content; max-width: min(340px, 90vw); white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  #tooltip.show { opacity: 1; }
+  #tooltip .rel { font-family: ui-monospace, monospace; font-weight: 600; margin-bottom: 2px; }
+  #tooltip .sub { opacity: .7; font-size: 11px; white-space: normal; }
+  #tooltip code { font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IMS&nbsp;·&nbsp;Database Schema</h1>
+  <span class="meta" id="counts"></span>
+  <span class="spacer"></span>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Find a table…" autocomplete="off" />
+    <button id="toggleCols">Hide columns</button>
+    <button id="reset">Reset layout</button>
+    <button id="theme">◐ Theme</button>
+  </div>
+</header>
+
+<div id="stage">
+  <div id="world">
+    <svg id="edges"></svg>
+  </div>
+</div>
+
+<div class="legend">
+  <b>IMS metadata-driven inventory</b> — PostgreSQL via Prisma.<br/>
+  Drag tables to rearrange · scroll to zoom · drag canvas to pan · hover a table to isolate its relationships.
+  <div class="row">
+    <span class="k"><span class="swatch"></span> foreign key</span>
+    <span class="k"><span class="swatch self"></span> self-reference</span>
+    <span class="k"><span class="badge pk">PK</span></span>
+    <span class="k"><span class="badge fk">FK</span></span>
+    <span class="k"><span class="badge u">U</span> unique</span>
+  </div>
+</div>
+
+<div class="enums" id="enums"></div>
+<div id="tooltip"></div>
+
+<script>
+// ---- Schema model (from apps/api/prisma/schema.prisma) ----
+const T = (name, group, cols) => ({ name, group, cols });
+const c = (name, type, opts = {}) => ({ name, type, ...opts });
+
+const tables = [
+  T('users', 'people', [
+    c('id','uuid',{pk:1}), c('email','text',{u:1}), c('password_hash','text'),
+    c('full_name','text'), c('role','UserRole'), c('is_active','bool'),
+    c('last_login_at','timestamptz',{nl:1}), c('created_at','timestamptz'),
+    c('updated_at','timestamptz'), c('deleted_at','timestamptz',{nl:1}),
+  ]),
+  T('settings', 'people', [
+    c('id','uuid',{pk:1}), c('key','text',{u:1}), c('value','json'),
+    c('description','text',{nl:1}), c('updated_by','uuid',{fk:'users',nl:1}),
+    c('created_at','timestamptz'), c('updated_at','timestamptz'),
+  ]),
+  T('files', 'people', [
+    c('id','uuid',{pk:1}), c('storage_key','text',{u:1}), c('original_name','text'),
+    c('mime_type','text'), c('size_bytes','bigint'), c('uploaded_by','uuid',{fk:'users',nl:1}),
+    c('created_at','timestamptz'),
+  ]),
+  T('audit_logs', 'people', [
+    c('id','uuid',{pk:1}), c('actor_id','uuid',{fk:'users',nl:1}), c('action','AuditAction'),
+    c('entity_type','text'), c('entity_id','uuid'), c('summary','text',{nl:1}),
+    c('before_data','json',{nl:1}), c('after_data','json',{nl:1}),
+    c('request_id','text',{nl:1}), c('ip_address','text',{nl:1}), c('created_at','timestamptz'),
+  ]),
+
+  T('inventory_types', 'meta', [
+    c('id','uuid',{pk:1}), c('code','text',{u:1}), c('name','text'),
+    c('description','text',{nl:1}), c('sort_order','int'), c('is_active','bool'),
+    c('created_at','timestamptz'), c('updated_at','timestamptz'), c('deleted_at','timestamptz',{nl:1}),
+  ]),
+  T('field_definitions', 'meta', [
+    c('id','uuid',{pk:1}), c('inventory_type_id','uuid',{fk:'inventory_types'}),
+    c('key','text',{u:1}), c('display_name','text'), c('description','text',{nl:1}),
+    c('field_type','FieldType'), c('is_required','bool'), c('is_unique','bool'),
+    c('default_value','json',{nl:1}), c('validation','json'), c('ui','json'),
+    c('sort_order','int'), c('is_visible','bool'), c('is_filterable','bool'),
+    c('is_searchable','bool'), c('is_active','bool'), c('created_at','timestamptz'),
+    c('updated_at','timestamptz'), c('deleted_at','timestamptz',{nl:1}),
+  ]),
+  T('field_options', 'meta', [
+    c('id','uuid',{pk:1}), c('field_definition_id','uuid',{fk:'field_definitions',cascade:1}),
+    c('value','text',{u:1}), c('label','text'), c('sort_order','int'),
+    c('is_active','bool'), c('created_at','timestamptz'), c('updated_at','timestamptz'),
+  ]),
+  T('categories', 'meta', [
+    c('id','uuid',{pk:1}), c('inventory_type_id','uuid',{fk:'inventory_types'}),
+    c('parent_id','uuid',{fk:'categories',self:1,nl:1}), c('code','text',{u:1}), c('name','text'),
+    c('description','text',{nl:1}), c('sort_order','int'), c('is_active','bool'),
+    c('created_at','timestamptz'), c('updated_at','timestamptz'), c('deleted_at','timestamptz',{nl:1}),
+  ]),
+
+  T('inventory_items', 'core', [
+    c('id','uuid',{pk:1}), c('inventory_type_id','uuid',{fk:'inventory_types'}),
+    c('category_id','uuid',{fk:'categories',nl:1}), c('sku','text',{u:1}), c('name','text'),
+    c('description','text',{nl:1}), c('quantity','decimal'), c('min_quantity','decimal'),
+    c('unit','text',{nl:1}), c('is_active','bool'), c('attributes','json'),
+    c('created_by','uuid',{fk:'users',nl:1}), c('updated_by','uuid',{fk:'users',nl:1}),
+    c('created_at','timestamptz'), c('updated_at','timestamptz'), c('deleted_at','timestamptz',{nl:1}),
+  ]),
+  T('inventory_item_suppliers', 'core', [
+    c('inventory_item_id','uuid',{pk:1,fk:'inventory_items',cascade:1}),
+    c('supplier_id','uuid',{pk:1,fk:'suppliers'}), c('is_preferred','bool'),
+    c('supplier_sku','text',{nl:1}), c('lead_time_days','int',{nl:1}),
+    c('notes','text',{nl:1}), c('created_at','timestamptz'),
+  ]),
+  T('suppliers', 'parties', [
+    c('id','uuid',{pk:1}), c('code','text',{u:1}), c('name','text'),
+    c('contact_name','text',{nl:1}), c('email','text',{nl:1}), c('phone','text',{nl:1}),
+    c('address','text',{nl:1}), c('notes','text',{nl:1}), c('metadata','json'),
+    c('is_active','bool'), c('created_at','timestamptz'), c('updated_at','timestamptz'),
+    c('deleted_at','timestamptz',{nl:1}),
+  ]),
+  T('buyers', 'parties', [
+    c('id','uuid',{pk:1}), c('code','text',{u:1}), c('name','text'),
+    c('contact_name','text',{nl:1}), c('email','text',{nl:1}), c('phone','text',{nl:1}),
+    c('address','text',{nl:1}), c('notes','text',{nl:1}), c('metadata','json'),
+    c('is_active','bool'), c('created_at','timestamptz'), c('updated_at','timestamptz'),
+    c('deleted_at','timestamptz',{nl:1}),
+  ]),
+  T('stock_transactions', 'core', [
+    c('id','uuid',{pk:1}), c('type','StockTransactionType'),
+    c('inventory_item_id','uuid',{fk:'inventory_items'}),
+    c('inventory_type_id','uuid',{fk:'inventory_types'}), c('quantity','decimal'),
+    c('quantity_before','decimal'), c('quantity_after','decimal'),
+    c('supplier_id','uuid',{fk:'suppliers',nl:1}), c('buyer_id','uuid',{fk:'buyers',nl:1}),
+    c('unit_price','decimal',{nl:1}), c('notes','text',{nl:1}),
+    c('created_by','uuid',{fk:'users',nl:1}), c('created_at','timestamptz'),
+  ]),
+];
+
+const enums = {
+  UserRole: ['SUPER_ADMIN','ADMIN','VIEWER'],
+  FieldType: ['TEXT','LONG_TEXT','NUMBER','DECIMAL','BOOLEAN','DATE','DATETIME','EMAIL','PHONE','URL','DROPDOWN','MULTI_SELECT','RADIO','CHECKBOX','COLOR','FILE','IMAGE','CURRENCY','BARCODE','QR_CODE','RELATIONSHIP'],
+  AuditAction: ['CREATE','UPDATE','DELETE','RESTORE'],
+  StockTransactionType: ['PURCHASE','SALE'],
+};
+
+// initial layout: x,y per table (world coords)
+const layout = {
+  users:               [60, 70],
+  settings:            [60, 470],
+  files:               [60, 690],
+  audit_logs:          [60, 880],
+  inventory_types:     [370, 70],
+  field_definitions:   [370, 360],
+  field_options:       [370, 820],
+  categories:          [680, 360],
+  inventory_items:     [1000, 70],
+  categories_spacer:   [0,0],
+  suppliers:           [1340, 470],
+  buyers:              [1340, 760],
+  inventory_item_suppliers: [1000, 560],
+  stock_transactions:  [1000, 840],
+};
+
+// ---- build relationships from fk columns ----
+const rels = [];
+for (const t of tables) {
+  for (const col of t.cols) {
+    if (col.fk) rels.push({ from: t.name, to: col.fk, col: col.name, self: !!col.self, cascade: !!col.cascade });
+  }
+}
+
+// ---- render tables ----
+const world = document.getElementById('world');
+const svg = document.getElementById('edges');
+const nodeEls = {};
+let showCols = true;
+
+function renderTables() {
+  for (const t of tables) {
+    const el = document.createElement('div');
+    el.className = 'table';
+    el.dataset.name = t.name;
+    const [x, y] = layout[t.name] || [0, 0];
+    el.style.left = x + 'px'; el.style.top = y + 'px';
+    el.innerHTML =
+      `<div class="thead"><span class="dot"></span><h2>${t.name}</h2><span class="cnt">${t.cols.length}</span></div>` +
+      `<ul class="cols">` + t.cols.map(col => {
+        const badges =
+          (col.pk ? '<span class="badge pk">PK</span>' : '') +
+          (col.fk ? '<span class="badge fk">FK</span>' : '') +
+          (col.u && !col.pk ? '<span class="badge u">U</span>' : '');
+        return `<li class="${col.nl ? 'nullable' : ''}">${badges}<span class="name">${col.name}</span><span class="type">${col.type}</span></li>`;
+      }).join('') + `</ul>`;
+    world.appendChild(el);
+    nodeEls[t.name] = el;
+  }
+}
+renderTables();
+
+// ---- edges (SVG) ----
+const NS = 'http://www.w3.org/2000/svg';
+function mkPath(cls) {
+  const p = document.createElementNS(NS, 'path');
+  p.setAttribute('fill', 'none');
+  if (cls) p.setAttribute('class', cls);
+  svg.appendChild(p);
+  return p;
+}
+// visible path + a wide transparent "hit" path on top for easy hovering
+const edgeEls = rels.map(r => {
+  const el = mkPath();
+  const hit = mkPath('hit');
+  hit.setAttribute('stroke', 'transparent');
+  hit.setAttribute('stroke-width', '16');
+  return { r, el, hit };
+});
+
+function rectOf(name) {
+  const el = nodeEls[name];
+  return { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+}
+// intersection of segment (center->center) with source rect border
+function anchor(a, b) {
+  const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
+  const dx = (b.x + b.w / 2) - cx, dy = (b.y + b.h / 2) - cy;
+  if (dx === 0 && dy === 0) return [cx, cy];
+  const hw = a.w / 2, hh = a.h / 2;
+  const sx = dx === 0 ? Infinity : hw / Math.abs(dx);
+  const sy = dy === 0 ? Infinity : hh / Math.abs(dy);
+  const s = Math.min(sx, sy);
+  return [cx + dx * s, cy + dy * s];
+}
+function drawEdges() {
+  let maxX = 0, maxY = 0;
+  for (const t of tables) { const r = rectOf(t.name); maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h); }
+  svg.setAttribute('width', maxX + 400); svg.setAttribute('height', maxY + 400);
+  for (const { r, el, hit } of edgeEls) {
+    const a = rectOf(r.from), b = rectOf(r.to);
+    let d;
+    if (r.self) {
+      const x = a.x + a.w, y = a.y + a.h / 2;
+      d = `M ${x} ${y} C ${x+70} ${y-40}, ${x+70} ${y+40}, ${x} ${y+18}`;
+      el.setAttribute('stroke', 'var(--pk)');
+    } else {
+      const [x1, y1] = anchor(a, b), [x2, y2] = anchor(b, a);
+      const mx = (x1 + x2) / 2;
+      d = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+      el.setAttribute('stroke', 'var(--edge)');
+    }
+    el.setAttribute('d', d);
+    hit.setAttribute('d', d);
+    el.setAttribute('stroke-width', '1.6');
+    el.dataset.from = r.from; el.dataset.to = r.to;
+  }
+}
+
+// ---- pan & zoom ----
+const stage = document.getElementById('stage');
+let scale = 0.82, tx = 20, ty = 70;
+function applyView() { world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }
+applyView();
+drawEdges();
+
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = stage.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const prev = scale;
+  scale = Math.min(2.2, Math.max(0.3, scale * (e.deltaY < 0 ? 1.1 : 0.9)));
+  // zoom toward cursor
+  tx = mx - (mx - tx) * (scale / prev);
+  ty = my - (my - ty) * (scale / prev);
+  applyView();
+}, { passive: false });
+
+let panning = false, panStart = null;
+stage.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('.table')) return;
+  panning = true; stage.classList.add('panning');
+  panStart = { x: e.clientX - tx, y: e.clientY - ty };
+  stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener('pointermove', (e) => {
+  if (!panning) return;
+  tx = e.clientX - panStart.x; ty = e.clientY - panStart.y; applyView();
+});
+stage.addEventListener('pointerup', (e) => { panning = false; stage.classList.remove('panning'); });
+
+// ---- drag tables ----
+let drag = null;
+world.addEventListener('pointerdown', (e) => {
+  const head = e.target.closest('.thead');
+  if (!head) return;
+  const el = head.parentElement;
+  drag = { el, sx: e.clientX, sy: e.clientY, ox: el.offsetLeft, oy: el.offsetTop };
+  el.style.zIndex = 5;
+  el.setPointerCapture(e.pointerId);
+  e.stopPropagation();
+});
+world.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  drag.el.style.left = (drag.ox + (e.clientX - drag.sx) / scale) + 'px';
+  drag.el.style.top  = (drag.oy + (e.clientY - drag.sy) / scale) + 'px';
+  drawEdges();
+});
+world.addEventListener('pointerup', () => { if (drag) { drag.el.style.zIndex = ''; drag = null; } });
+
+// ---- hover highlight ----
+function setHighlight(name) {
+  const connected = new Set([name]);
+  for (const r of rels) { if (r.from === name) connected.add(r.to); if (r.to === name) connected.add(r.from); }
+  for (const t of tables) {
+    const el = nodeEls[t.name];
+    el.classList.toggle('hi', t.name === name);
+    el.classList.toggle('dim', name && !connected.has(t.name));
+  }
+  for (const { r, el } of edgeEls) {
+    const on = !name || r.from === name || r.to === name;
+    el.setAttribute('stroke', on ? (r.self ? 'var(--pk)' : (name ? 'var(--edge-hi)' : 'var(--edge)')) : 'var(--edge)');
+    el.setAttribute('stroke-width', (name && on) ? '2.4' : '1.6');
+    el.style.opacity = (!name || on) ? '1' : '0.12';
+  }
+}
+function clearHighlight() { setHighlight(null); }
+for (const t of tables) {
+  nodeEls[t.name].addEventListener('mouseenter', () => setHighlight(t.name));
+  nodeEls[t.name].addEventListener('mouseleave', clearHighlight);
+}
+
+// ---- edge hover: describe the relationship ----
+const tooltip = document.getElementById('tooltip');
+function colOf(tbl, name) { return tables.find(t => t.name === tbl)?.cols.find(c => c.name === name); }
+function relText(r) {
+  const col = colOf(r.from, r.col);
+  const optional = col && col.nl;
+  const kind = r.self ? 'self-reference (hierarchy / tree)' : 'many-to-one';
+  const onDel = r.cascade ? ' · ON&nbsp;DELETE&nbsp;CASCADE' : '';
+  const nullable = optional ? ' · optional (nullable FK)' : ' · required';
+  return `<div class="rel">${r.from}.${r.col} &rarr; ${r.to}.id</div>` +
+         `<div class="sub">${kind}${nullable}${onDel}<br>` +
+         `each <code>${r.from}</code> row references one <code>${r.to}</code>; ` +
+         `a <code>${r.to}</code> can have many <code>${r.from}</code>.</div>`;
+}
+function setEdgeHover(active) {
+  for (const t of tables) {
+    const on = active && (t.name === active.from || t.name === active.to);
+    nodeEls[t.name].classList.toggle('hi', !!on);
+    nodeEls[t.name].classList.toggle('dim', !!active && !on);
+  }
+  for (const e of edgeEls) {
+    const on = !active || e.r === active;
+    e.el.setAttribute('stroke', on ? (e.r.self ? 'var(--pk)' : (active ? 'var(--edge-hi)' : 'var(--edge)')) : 'var(--edge)');
+    e.el.setAttribute('stroke-width', (active && on) ? '2.6' : '1.6');
+    e.el.style.opacity = (!active || on) ? '1' : '0.1';
+  }
+}
+for (const { r, hit } of edgeEls) {
+  hit.addEventListener('mousemove', (e) => {
+    tooltip.innerHTML = relText(r);
+    tooltip.style.left = e.clientX + 'px';
+    tooltip.style.top = e.clientY + 'px';
+    tooltip.classList.add('show');
+    setEdgeHover(r);
+  });
+  hit.addEventListener('mouseleave', () => {
+    tooltip.classList.remove('show');
+    setEdgeHover(null);
+  });
+}
+
+// ---- controls ----
+document.getElementById('counts').textContent =
+  `${tables.length} tables · ${rels.length} relationships · ${Object.keys(enums).length} enums`;
+
+document.getElementById('reset').onclick = () => {
+  for (const t of tables) { const [x,y] = layout[t.name]||[0,0]; nodeEls[t.name].style.left = x+'px'; nodeEls[t.name].style.top = y+'px'; }
+  scale = 0.82; tx = 20; ty = 70; applyView(); drawEdges();
+};
+document.getElementById('toggleCols').onclick = (e) => {
+  showCols = !showCols;
+  document.querySelectorAll('.cols').forEach(ul => ul.style.display = showCols ? '' : 'none');
+  e.target.textContent = showCols ? 'Hide columns' : 'Show columns';
+  requestAnimationFrame(drawEdges);
+};
+const search = document.getElementById('search');
+search.oninput = () => {
+  const q = search.value.trim().toLowerCase();
+  if (!q) { clearHighlight(); return; }
+  const match = tables.filter(t => t.name.includes(q)).map(t => t.name);
+  for (const t of tables) {
+    const el = nodeEls[t.name];
+    el.classList.remove('hi');
+    el.classList.toggle('dim', match.length > 0 && !match.includes(t.name));
+  }
+};
+
+// theme toggle
+const themeBtn = document.getElementById('theme');
+themeBtn.onclick = () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark'
+    : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+  document.documentElement.setAttribute('data-theme', next);
+};
+
+// enums panel
+document.getElementById('enums').innerHTML =
+  '<h3>Enums</h3>' + Object.entries(enums).map(([k, vals]) =>
+    `<div class="en"><b>${k}</b> <code>${vals.join(' · ')}</code></div>`).join('');
+
+window.addEventListener('resize', drawEdges);
+</script>
+</body>
+</html>
