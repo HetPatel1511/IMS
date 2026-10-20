@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, toErrorMessage } from '../../shared/api';
+import { formatNumber } from '../../shared/format';
 
 type Summary = {
   inventoryTypes: number;
@@ -14,10 +15,30 @@ type Summary = {
   }>;
 };
 
+type LowItem = {
+  id: string;
+  sku: string;
+  name: string;
+  quantity: number | string;
+  minQuantity: number | string;
+  inventoryType?: { name: string };
+};
+
 export function DashboardPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['dashboard'],
     queryFn: async () => (await api<Summary>('/dashboard/summary')).data,
+  });
+
+  const lowStockQuery = useQuery({
+    queryKey: ['dashboard', 'low-stock'],
+    enabled: (data?.lowStockItems ?? 0) > 0,
+    queryFn: async () => {
+      const all = (await api<LowItem[]>('/inventory-items?pageSize=100')).data;
+      return all
+        .filter((i) => Number(i.quantity) <= Number(i.minQuantity))
+        .sort((a, b) => Number(a.quantity) - Number(b.quantity));
+    },
   });
 
   if (isLoading) return <p className="muted">Loading dashboard…</p>;
@@ -57,6 +78,51 @@ export function DashboardPage() {
           <strong>{data.buyers}</strong>
         </Link>
       </div>
+      {data.lowStockItems > 0 ? (
+        <div className="card stack">
+          <h3 className="page-title">Low stock — reorder needed</h3>
+          <div className="table-wrap">
+            <table className="table cards" aria-label="Low stock items">
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Qty</th>
+                  <th>Min</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {(lowStockQuery.data ?? []).map((it) => (
+                  <tr key={it.id}>
+                    <td data-label="SKU">{it.sku}</td>
+                    <td data-label="Name">{it.name}</td>
+                    <td data-label="Type">{it.inventoryType?.name ?? '—'}</td>
+                    <td className="num" data-label="Qty">
+                      <span className="low-badge">{formatNumber(it.quantity)}</span>
+                    </td>
+                    <td className="num" data-label="Min">{formatNumber(it.minQuantity)}</td>
+                    <td data-label="Actions">
+                      <Link className="btn secondary" to="/stock">
+                        Restock
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+                {lowStockQuery.isLoading ? (
+                  <tr>
+                    <td colSpan={6} className="muted">
+                      Loading…
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
       <div className="card">
         <h3 className="page-title">Items by type</h3>
         {data.itemsByType.length === 0 ? (

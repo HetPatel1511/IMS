@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../../shared/auth';
+import { getTheme, nextTheme, saveTheme, themeIcon, themeLabel } from '../../shared/theme';
 
 export function LoginPage() {
   const { user, login } = useAuth();
@@ -8,6 +9,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [theme, setTheme] = useState(() => getTheme());
 
   if (user) return <Navigate to="/" replace />;
 
@@ -26,6 +28,19 @@ export function LoginPage() {
 
   return (
     <div className="login-page">
+      <button
+        type="button"
+        className="icon-btn login-theme"
+        aria-label={`Theme: ${themeLabel(theme)}. Click to change.`}
+        title={`Theme: ${themeLabel(theme)}`}
+        onClick={() => {
+          const t = nextTheme(theme);
+          setTheme(t);
+          saveTheme(t);
+        }}
+      >
+        {themeIcon(theme)}
+      </button>
       <form className="card login-card stack" onSubmit={onSubmit}>
         <div>
           <h1>IMS</h1>

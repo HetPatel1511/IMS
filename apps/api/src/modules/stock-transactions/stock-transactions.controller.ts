@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { CurrentUser, Roles, type AuthUser } from '../../common/decorators/auth.decorators';
 import {
+  AdjustStockDto,
   BuyStockDto,
   SellStockDto,
   StockTransactionQueryDto,
@@ -33,6 +34,16 @@ export class StockTransactionsController {
     @Req() req: Request & { requestId?: string },
   ) {
     return { data: await this.stock.sell(dto, user, req.requestId) };
+  }
+
+  @Roles('ADMIN')
+  @Post('adjust')
+  async adjust(
+    @Body() dto: AdjustStockDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request & { requestId?: string },
+  ) {
+    return { data: await this.stock.adjust(dto, user, req.requestId) };
   }
 
   @Roles('VIEWER')

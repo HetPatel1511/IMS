@@ -55,10 +55,23 @@ export class SellStockDto {
   notes?: string;
 }
 
+export class AdjustStockDto {
+  @IsUUID()
+  inventoryItemId!: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  newQuantity!: number;
+
+  @IsString()
+  reason!: string;
+}
+
 export class StockTransactionQueryDto extends PaginationQueryDto {
   @IsOptional()
-  @IsIn(['PURCHASE', 'SALE'])
-  type?: 'PURCHASE' | 'SALE';
+  @IsIn(['PURCHASE', 'SALE', 'ADJUSTMENT'])
+  type?: 'PURCHASE' | 'SALE' | 'ADJUSTMENT';
 
   @IsOptional()
   @IsUUID()

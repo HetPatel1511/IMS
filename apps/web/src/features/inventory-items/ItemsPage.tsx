@@ -1,10 +1,11 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasMinRole, type UserRole } from '@ims/shared';
-import { api, toErrorMessage, type ApiEnvelope } from '../../shared/api';
+import { api, ApiRequestError, toErrorMessage, type ApiEnvelope } from '../../shared/api';
 import { useToast } from '../../shared/toast';
 import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
+import { useFocusTrap } from '../../shared/useFocusTrap';
 import { DynamicForm, type FieldDefinition } from './DynamicForm';
 import { DynamicTable, type SortKey, type SortState } from './DynamicTable';
 
@@ -55,6 +56,15 @@ export function ItemsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formTypeId, setFormTypeId] = useState('');
   const [form, setForm] = useState({ ...emptyForm });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const dirtyRef = useRef(false);
+  const trapRef = useFocusTrap<HTMLDivElement>(dialogOpen);
+
+  // Mark the form dirty + update it (used by user-facing inputs).
+  function change(patch: Partial<typeof emptyForm>) {
+    dirtyRef.current = true;
+    setForm((f) => ({ ...f, ...patch }));
+  }
 
   const typesQuery = useQuery({
     queryKey: ['inventory-types'],
@@ -134,9 +144,20 @@ export function ItemsPage() {
       qc.invalidateQueries({ queryKey: ['items'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       toast.success(editingId ? 'Item updated' : 'Item created');
-      closeDialog();
+      forceClose();
     },
-    onError: (e) => toast.error(toErrorMessage(e)),
+    onError: (e) => {
+      // Map structured validation details onto the offending fields.
+      if (e instanceof ApiRequestError && e.details?.length) {
+        const errs: Record<string, string> = {};
+        for (const d of e.details) {
+          if (!d.path) continue;
+          errs[d.path.replace(/^attributes\./, '')] = d.message;
+        }
+        setFieldErrors(errs);
+      }
+      toast.error(toErrorMessage(e));
+    },
   });
 
   const remove = useMutation({
@@ -152,14 +173,17 @@ export function ItemsPage() {
 
   function openCreate() {
     setEditingId(null);
+    setFieldErrors({});
     setForm({ ...emptyForm, attributes: {} });
     setFormTypeId(typeId || typesQuery.data?.[0]?.id || '');
     setDialogOpen(true);
+    dirtyRef.current = false;
   }
 
   async function openEdit(id: string) {
     const res = await api<Item>(`/inventory-items/${id}`);
     setEditingId(id);
+    setFieldErrors({});
     setFormTypeId(res.data.inventoryTypeId);
     setForm({
       sku: res.data.sku,
@@ -169,16 +193,54 @@ export function ItemsPage() {
       attributes: (res.data.attributes as Record<string, unknown>) ?? {},
     });
     setDialogOpen(true);
+    dirtyRef.current = false;
   }
 
-  function closeDialog() {
+  function forceClose() {
     setDialogOpen(false);
     setEditingId(null);
+    setFieldErrors({});
     setForm({ ...emptyForm, attributes: {} });
+    dirtyRef.current = false;
+  }
+
+  async function closeDialog() {
+    if (dirtyRef.current) {
+      const ok = await confirm({
+        title: 'Discard changes?',
+        message: 'You have unsaved changes. Close without saving?',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Keep editing',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    forceClose();
   }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
+    // Validate client-side so required-field failures render as the app's styled
+    // inline errors instead of the native browser bubble (the form uses noValidate).
+    const errs: Record<string, string> = {};
+    if (!form.sku.trim()) errs.sku = 'SKU is required.';
+    if (!form.name.trim()) errs.name = 'Name is required.';
+    for (const f of formFields) {
+      if (!f.isRequired || f.isActive === false || f.isVisible === false) continue;
+      const v = form.attributes[f.key];
+      const missing =
+        v === undefined ||
+        v === null ||
+        v === '' ||
+        (Array.isArray(v) && v.length === 0) ||
+        ((f.fieldType === 'BOOLEAN' || f.fieldType === 'CHECKBOX') && v === false);
+      if (missing) errs[f.key] = `${f.displayName} is required.`;
+    }
+    if (Object.keys(errs).length) {
+      setFieldErrors(errs);
+      return;
+    }
+    setFieldErrors({});
     save.mutate();
   }
 
@@ -336,20 +398,36 @@ export function ItemsPage() {
       {dialogOpen ? (
         <div className="modal-backdrop" onClick={closeDialog}>
           <div
-            className="modal card stack"
+            ref={trapRef}
+            className={`modal card stack${editingId ? ' edit-mode' : ''}`}
             role="dialog"
             aria-modal="true"
-            aria-label={editingId ? 'Edit item' : 'Add item'}
+            aria-label={editingId ? `Edit item ${form.sku}` : 'Add item'}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="row spread">
-              <h3 className="page-title">{editingId ? 'Edit item' : 'Add item'}</h3>
+              <div>
+                <h3 className="page-title">
+                  {editingId ? (
+                    <>
+                      <span className="edit-badge">Editing</span> {form.sku || 'item'}
+                    </>
+                  ) : (
+                    'Add item'
+                  )}
+                </h3>
+                <p className="modal-subtitle">
+                  {editingId
+                    ? 'Updating an existing item — its inventory type is fixed.'
+                    : 'Create a new item for a chosen inventory type.'}
+                </p>
+              </div>
               <button type="button" className="icon-btn" aria-label="Close" onClick={closeDialog}>
                 ×
               </button>
             </div>
 
-            <form className="stack" onSubmit={onSubmit}>
+            <form className="stack" onSubmit={onSubmit} noValidate>
               {!editingId ? (
                 <label className="label" htmlFor="item-type">
                   Inventory type
@@ -382,9 +460,11 @@ export function ItemsPage() {
                         id="item-sku"
                         className="input"
                         value={form.sku}
-                        onChange={(e) => setForm({ ...form, sku: e.target.value })}
+                        onChange={(e) => change({ sku: e.target.value })}
+                        aria-invalid={Boolean(fieldErrors.sku)}
                         required
                       />
+                      {fieldErrors.sku ? <small className="field-error">{fieldErrors.sku}</small> : null}
                     </label>
                     <label className="label" htmlFor="item-name">
                       Name
@@ -392,9 +472,11 @@ export function ItemsPage() {
                         id="item-name"
                         className="input"
                         value={form.name}
-                        onChange={(e) => setForm({ ...form, name: e.target.value })}
+                        onChange={(e) => change({ name: e.target.value })}
+                        aria-invalid={Boolean(fieldErrors.name)}
                         required
                       />
+                      {fieldErrors.name ? <small className="field-error">{fieldErrors.name}</small> : null}
                     </label>
                     <label className="label" htmlFor="item-qty">
                       Quantity
@@ -402,8 +484,10 @@ export function ItemsPage() {
                         id="item-qty"
                         className="input"
                         type="number"
+                        min="0"
+                        step="any"
                         value={form.quantity}
-                        onChange={(e) => setForm({ ...form, quantity: Number(e.target.value) })}
+                        onChange={(e) => change({ quantity: Number(e.target.value) })}
                       />
                     </label>
                     <label className="label" htmlFor="item-minqty">
@@ -412,10 +496,10 @@ export function ItemsPage() {
                         id="item-minqty"
                         className="input"
                         type="number"
+                        min="0"
+                        step="any"
                         value={form.minQuantity}
-                        onChange={(e) =>
-                          setForm({ ...form, minQuantity: Number(e.target.value) })
-                        }
+                        onChange={(e) => change({ minQuantity: Number(e.target.value) })}
                       />
                     </label>
                   </div>
@@ -426,7 +510,8 @@ export function ItemsPage() {
                       <DynamicForm
                         fields={formFields}
                         values={form.attributes}
-                        onChange={(attributes) => setForm({ ...form, attributes })}
+                        errors={fieldErrors}
+                        onChange={(attributes) => change({ attributes })}
                       />
                     </>
                   ) : null}
@@ -441,7 +526,7 @@ export function ItemsPage() {
                   type="submit"
                   disabled={save.isPending || !formTypeId}
                 >
-                  {editingId ? 'Save changes' : 'Add item'}
+                  {save.isPending ? 'Saving…' : editingId ? 'Save changes' : 'Add item'}
                 </button>
                 <button type="button" className="btn secondary" onClick={closeDialog}>
                   Cancel

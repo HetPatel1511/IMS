@@ -75,7 +75,7 @@ export function DynamicTable({
 
   return (
     <div className="table-wrap">
-      <table className="table">
+      <table className="table cards" aria-label="Inventory items">
         <thead>
           <tr>
             {header('sku', 'SKU')}
@@ -94,26 +94,29 @@ export function DynamicTable({
           ) : (
             rows.map((item) => (
               <tr key={item.id}>
-                <td>{item.sku}</td>
-                <td>{item.name}</td>
-                <td>{item.inventoryType?.name ?? '—'}</td>
-                <td className="num">
+                <td data-label="SKU"><span className="cell-ellipsis" title={item.sku}>{item.sku}</span></td>
+                <td data-label="Name"><span className="cell-ellipsis" title={item.name}>{item.name}</span></td>
+                <td data-label="Type">{item.inventoryType?.name ?? '—'}</td>
+                <td className="num" data-label="Qty">
                   <span className="qty">
                     <span>{formatNumber(item.quantity)}</span>
                     {Number(item.quantity) <= Number(item.minQuantity) ? (
-                      <span className="error">low</span>
+                      <span className="low-badge" title="At or below reorder level">
+                        <span aria-hidden>⚠</span> low
+                      </span>
                     ) : null}
                   </span>
                 </td>
                 {cols.map((c) => (
                   <td
                     key={c.id}
+                    data-label={c.displayName}
                     className={NUMERIC_FIELD_TYPES.has(c.fieldType) ? 'num' : undefined}
                   >
                     {formatAttr(item.attributes?.[c.key], c.fieldType)}
                   </td>
                 ))}
-                <td>
+                <td data-label="Actions">
                   <div className="row">
                     {onEdit ? (
                       <button type="button" className="btn secondary" onClick={() => onEdit(item.id)}>
@@ -123,7 +126,7 @@ export function DynamicTable({
                     {onDelete ? (
                       <button
                         type="button"
-                        className="btn secondary"
+                        className="btn secondary danger"
                         onClick={() => onDelete(item.id, item.name)}
                       >
                         Delete

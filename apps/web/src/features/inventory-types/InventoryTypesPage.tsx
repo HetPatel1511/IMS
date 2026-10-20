@@ -125,6 +125,8 @@ export function InventoryTypesPage() {
   const [editingTypeId, setEditingTypeId] = useState<string | null>(null);
   const [field, setField] = useState<FieldFormState>(emptyField);
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
 
   const typesQuery = useQuery({
     queryKey: ['inventory-types'],
@@ -236,6 +238,16 @@ export function InventoryTypesPage() {
     reorderFields.mutate(ids);
   }
 
+  // Drag-and-drop field reordering
+  function dropField(fromIndex: number, toIndex: number) {
+    const list = fieldsQuery.data ?? [];
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    const ids = list.map((f) => f.id);
+    const [moved] = ids.splice(fromIndex, 1);
+    ids.splice(toIndex, 0, moved);
+    reorderFields.mutate(ids);
+  }
+
   async function confirmDeleteField(f: FieldDefinition) {
     const ok = await confirm({
       title: 'Delete field',
@@ -247,9 +259,19 @@ export function InventoryTypesPage() {
   }
 
   async function confirmDeleteType(t: InventoryType) {
+    let count = 0;
+    try {
+      const res = await api<unknown[]>(`/inventory-items?inventoryTypeId=${t.id}&pageSize=1`);
+      count = res.meta?.total ?? 0;
+    } catch {
+      /* ignore — show generic message */
+    }
     const ok = await confirm({
       title: 'Delete inventory type',
-      message: `Delete type "${t.name}"? This cannot be undone and fails if items still use it.`,
+      message:
+        count > 0
+          ? `"${t.name}" is used by ${count} item${count === 1 ? '' : 's'}. Deleting it will fail until those items are removed.`
+          : `Delete type "${t.name}"? This cannot be undone.`,
       confirmLabel: 'Delete',
       danger: true,
     });
@@ -354,7 +376,7 @@ export function InventoryTypesPage() {
           </form>
           ) : null}
           <div className="table-wrap">
-            <table className="table compact">
+            <table className="table compact cards" aria-label="Inventory types">
               <thead>
                 <tr>
                   <th>Name</th>
@@ -365,21 +387,28 @@ export function InventoryTypesPage() {
               <tbody>
                 {(typesQuery.data ?? []).map((t) => (
                   <tr key={t.id} className={selectedId === t.id ? 'row-selected' : undefined}>
-                    <td>
+                    <td data-label="Name">
                       <button
                         type="button"
-                        className="btn secondary"
+                        className="btn secondary type-select"
+                        aria-pressed={selectedId === t.id}
+                        title={`Manage fields for ${t.name}`}
                         onClick={() => {
                           setSelectedId(t.id);
                           resetField();
                         }}
                       >
-                        {t.name}
-                        {t.isActive === false ? ' (inactive)' : ''}
+                        <span>
+                          {t.name}
+                          {t.isActive === false ? ' (inactive)' : ''}
+                        </span>
+                        <span className="type-select-hint" aria-hidden>
+                          {selectedId === t.id ? '✓ editing' : 'manage ›'}
+                        </span>
                       </button>
                     </td>
-                    <td>{t.code}</td>
-                    <td>
+                    <td data-label="Code">{t.code}</td>
+                    <td data-label="Actions">
                       {canWrite ? (
                       <div className="row">
                         <button
@@ -423,7 +452,30 @@ export function InventoryTypesPage() {
         <div className="card stack">
           <h3 className="page-title">Schema builder</h3>
           {!selectedId ? (
-            <p className="muted">Select a type to manage fields.</p>
+            <div className="empty-state">
+              <svg className="es-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M4 7h16M4 12h16M4 17h10" />
+                <path d="M18 15v6M15 18h6" />
+              </svg>
+              <h4>Build a type's fields</h4>
+              <p>
+                Pick an inventory type to add custom fields (text, numbers,
+                dropdowns, dates, files and more). Those fields become the attributes you
+                capture on every item of that type.
+              </p>
+              {canWrite && typesQuery.data?.length ? (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setSelectedId(typesQuery.data![0].id);
+                    resetField();
+                  }}
+                >
+                  Start with “{typesQuery.data[0].name}”
+                </button>
+              ) : null}
+            </div>
           ) : (
             <>
               {canWrite ? (
@@ -507,6 +559,12 @@ export function InventoryTypesPage() {
                 {showOptions ? (
                   <div className="stack options-editor">
                     <strong>Predefined values</strong>
+                    {field.options.filter((o) => o.value).length === 0 ? (
+                      <small className="field-error">
+                        Add at least one value — a required {field.fieldType.toLowerCase()} with no
+                        options can’t be filled on the item form.
+                      </small>
+                    ) : null}
                     {field.options.map((opt, i) => (
                       <div className="row" key={i}>
                         <input
@@ -558,6 +616,9 @@ export function InventoryTypesPage() {
                   </div>
                 ) : null}
 
+                <details className="config-group">
+                  <summary>Validation &amp; advanced options</summary>
+                  <div className="group-body">
                 {showNumeric ? (
                   <div className="grid cols-2">
                     <label className="label" htmlFor="field-min">
@@ -706,6 +767,8 @@ export function InventoryTypesPage() {
                     Visible
                   </label>
                 </div>
+                  </div>
+                </details>
 
                 <div className="row actions">
                   <button className="btn" type="submit" disabled={saveField.isPending}>
@@ -721,7 +784,7 @@ export function InventoryTypesPage() {
               ) : null}
 
               <div className="table-wrap">
-                <table className="table">
+                <table className="table cards" aria-label="Fields">
                   <thead>
                     <tr>
                       <th>Order</th>
@@ -734,40 +797,73 @@ export function InventoryTypesPage() {
                   </thead>
                   <tbody>
                     {(fieldsQuery.data ?? []).map((f, idx) => (
-                      <tr key={f.id}>
-                        <td className="num">
+                      <tr
+                        key={f.id}
+                        draggable={canWrite}
+                        onDragStart={() => setDragIdx(idx)}
+                        onDragOver={(e) => {
+                          if (dragIdx === null) return;
+                          e.preventDefault();
+                          setOverIdx(idx);
+                        }}
+                        onDragEnd={() => {
+                          setDragIdx(null);
+                          setOverIdx(null);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (dragIdx !== null) dropField(dragIdx, idx);
+                          setDragIdx(null);
+                          setOverIdx(null);
+                        }}
+                        className={
+                          dragIdx === idx ? 'dragging' : overIdx === idx ? 'drag-over' : undefined
+                        }
+                      >
+                        <td className="num" data-label="Order">
                           {canWrite ? (
-                          <div className="reorder">
-                            <button
-                              type="button"
-                              className="icon-btn-sm"
-                              aria-label="Move up"
-                              disabled={idx === 0 || reorderFields.isPending}
-                              onClick={() => moveField(idx, -1)}
-                            >
-                              ▲
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn-sm"
-                              aria-label="Move down"
-                              disabled={
-                                idx === (fieldsQuery.data?.length ?? 0) - 1 ||
-                                reorderFields.isPending
-                              }
-                              onClick={() => moveField(idx, 1)}
-                            >
-                              ▼
-                            </button>
-                          </div>
+                            <div className="row" style={{ gap: '0.4rem', flexWrap: 'nowrap' }}>
+                              <button
+                                type="button"
+                                className="drag-handle"
+                                aria-label={`Drag to reorder ${f.displayName}`}
+                                title="Drag to reorder"
+                              >
+                                ⠿
+                              </button>
+                              <span>{f.sortOrder}</span>
+                              <span className="sr-reorder">
+                                <button
+                                  type="button"
+                                  className="icon-btn-sm"
+                                  aria-label={`Move ${f.displayName} up`}
+                                  disabled={idx === 0 || reorderFields.isPending}
+                                  onClick={() => moveField(idx, -1)}
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  className="icon-btn-sm"
+                                  aria-label={`Move ${f.displayName} down`}
+                                  disabled={
+                                    idx === (fieldsQuery.data?.length ?? 0) - 1 ||
+                                    reorderFields.isPending
+                                  }
+                                  onClick={() => moveField(idx, 1)}
+                                >
+                                  ▼
+                                </button>
+                              </span>
+                            </div>
                           ) : (
                             f.sortOrder
                           )}
                         </td>
-                        <td>{f.key}</td>
-                        <td>{f.displayName}</td>
-                        <td>{f.fieldType}</td>
-                        <td className="muted">
+                        <td data-label="Key">{f.key}</td>
+                        <td data-label="Label">{f.displayName}</td>
+                        <td data-label="Type">{f.fieldType}</td>
+                        <td className="muted" data-label="Flags">
                           {[
                             f.isRequired && 'required',
                             f.isUnique && 'unique',
@@ -777,7 +873,7 @@ export function InventoryTypesPage() {
                             .filter(Boolean)
                             .join(', ') || '—'}
                         </td>
-                        <td>
+                        <td data-label="Actions">
                           {canWrite ? (
                           <div className="row">
                             <button

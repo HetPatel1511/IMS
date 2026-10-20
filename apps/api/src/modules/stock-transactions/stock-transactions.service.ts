@@ -9,6 +9,7 @@ import {
 import { paginateMeta } from '../../common/dto/pagination.dto';
 import type { AuthUser } from '../../common/decorators/auth.decorators';
 import {
+  AdjustStockDto,
   BuyStockDto,
   SellStockDto,
   StockTransactionQueryDto,
@@ -63,6 +64,57 @@ export class StockTransactionsService {
       afterData: tx,
       requestId,
       summary: `Purchased ${dto.quantity} of ${item.sku} from supplier`,
+    });
+
+    return tx;
+  }
+
+  async adjust(dto: AdjustStockDto, actor?: AuthUser, requestId?: string) {
+    const item = await this.requireItem(dto.inventoryItemId);
+    if (!dto.reason?.trim()) {
+      throw new ValidationFailedError('A reason is required for a stock adjustment', [
+        { path: 'reason', message: 'Required' },
+      ]);
+    }
+
+    const quantityBefore = new Prisma.Decimal(item.quantity);
+    const quantityAfter = new Prisma.Decimal(dto.newQuantity);
+    const delta = quantityAfter.sub(quantityBefore);
+    if (delta.isZero()) {
+      throw new ValidationFailedError('New quantity is the same as the current quantity', [
+        { path: 'newQuantity', message: 'No change' },
+      ]);
+    }
+
+    const tx = await this.prisma.$transaction(async (db) => {
+      await db.inventoryItem.update({
+        where: { id: item.id },
+        data: { quantity: quantityAfter, updatedById: actor?.id },
+      });
+
+      return db.stockTransaction.create({
+        data: {
+          type: 'ADJUSTMENT',
+          inventoryItemId: item.id,
+          inventoryTypeId: item.inventoryTypeId,
+          quantity: delta.abs(),
+          quantityBefore,
+          quantityAfter,
+          notes: dto.reason,
+          createdById: actor?.id,
+        },
+        include: this.defaultInclude(),
+      });
+    });
+
+    await this.audit.log({
+      actorId: actor?.id,
+      action: 'UPDATE',
+      entityType: 'stock_transactions',
+      entityId: tx.id,
+      afterData: tx,
+      requestId,
+      summary: `Adjusted ${item.sku} from ${quantityBefore.toString()} to ${quantityAfter.toString()}`,
     });
 
     return tx;
@@ -153,18 +205,37 @@ export class StockTransactionsService {
       ];
     }
 
+    const orderBy = this.parseSort(query.sort);
+
     const [total, data] = await this.prisma.$transaction([
       this.prisma.stockTransaction.count({ where }),
       this.prisma.stockTransaction.findMany({
         where,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         include: this.defaultInclude(),
       }),
     ]);
 
     return { data, meta: paginateMeta(query.page, query.pageSize, total) };
+  }
+
+  // Parse a `field:dir` sort param into a Prisma orderBy, defaulting to newest first.
+  private parseSort(sort?: string): Prisma.StockTransactionOrderByWithRelationInput {
+    const allowed: Record<string, Prisma.StockTransactionOrderByWithRelationInput> = {
+      createdAt: {},
+      type: {},
+      quantity: {},
+      quantityAfter: {},
+    };
+    if (!sort) return { createdAt: 'desc' };
+    const [field, dirRaw] = sort.split(':');
+    const dir: Prisma.SortOrder = dirRaw === 'asc' ? 'asc' : 'desc';
+    if (field === 'item') return { inventoryItem: { sku: dir } };
+    if (field === 'inventoryType') return { inventoryType: { name: dir } };
+    if (field in allowed) return { [field]: dir } as Prisma.StockTransactionOrderByWithRelationInput;
+    return { createdAt: 'desc' };
   }
 
   private defaultInclude() {

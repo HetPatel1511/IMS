@@ -6,6 +6,9 @@ import { useToast } from '../../shared/toast';
 import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
 import { SkeletonRows } from '../../shared/Skeleton';
+import { SortableTh, sortRows, useClientSort } from '../../shared/SortHeader';
+
+type PartyKey = 'code' | 'name' | 'email' | 'phone';
 
 type Party = {
   id: string;
@@ -30,8 +33,10 @@ function PartyPage({
   const confirm = useConfirm();
   const { user } = useAuth();
   const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
+  const { sort, toggle } = useClientSort<PartyKey>();
   const [form, setForm] = useState({ ...emptyForm });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const list = useQuery({
     queryKey: [resource],
@@ -41,23 +46,36 @@ function PartyPage({
   const reset = () => {
     setForm({ ...emptyForm });
     setEditingId(null);
+    setFieldErrors({});
   };
 
+  const singular = title.replace(/s$/, '');
   const save = useMutation({
     mutationFn: async () => {
-      const body = JSON.stringify({
-        code: form.code,
-        name: form.name,
-        email: form.email || null,
-        phone: form.phone || null,
+      if (editingId) {
+        // `code` is immutable on update — the API rejects it, so omit it.
+        return api(`/${resource}/${editingId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: form.name,
+            email: form.email || null,
+            phone: form.phone || null,
+          }),
+        });
+      }
+      return api(`/${resource}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          code: form.code,
+          name: form.name,
+          email: form.email || null,
+          phone: form.phone || null,
+        }),
       });
-      return editingId
-        ? api(`/${resource}/${editingId}`, { method: 'PATCH', body })
-        : api(`/${resource}`, { method: 'POST', body });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [resource] });
-      toast.success(editingId ? `${title} updated` : `${title} added`);
+      toast.success(editingId ? `${singular} updated` : `${singular} added`);
       reset();
     },
     onError: (e) => toast.error(toErrorMessage(e)),
@@ -75,10 +93,23 @@ function PartyPage({
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
+    // Client-side validation surfaces as the app's styled inline errors rather than
+    // the native browser bubble (the form uses noValidate).
+    const errs: Record<string, string> = {};
+    if (!editingId && !form.code.trim()) errs.code = 'Code is required.';
+    if (!form.name.trim()) errs.name = 'Name is required.';
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      errs.email = 'Enter a valid email address.';
+    }
+    if (Object.keys(errs).length) {
+      setFieldErrors(errs);
+      return;
+    }
+    setFieldErrors({});
     save.mutate();
   }
 
-  const rows = list.data ?? [];
+  const rows = sortRows(list.data ?? [], sort, (r, k) => r[k as keyof Party]);
 
   return (
     <div className="stack">
@@ -90,16 +121,21 @@ function PartyPage({
       </div>
       {canWrite ? (
       <div className="card stack">
-        <form className="grid cols-2" onSubmit={onSubmit}>
+        <form className="grid cols-2" onSubmit={onSubmit} noValidate>
           <label className="label" htmlFor="party-code">
             Code
             <input
               id="party-code"
               className="input"
               value={form.code}
-              onChange={(e) => setForm({ ...form, code: e.target.value })}
-              required
+              onChange={(e) => {
+                setForm({ ...form, code: e.target.value });
+                if (fieldErrors.code) setFieldErrors((p) => ({ ...p, code: '' }));
+              }}
+              aria-invalid={Boolean(fieldErrors.code)}
+              disabled={Boolean(editingId)}
             />
+            {fieldErrors.code ? <small className="field-error">{fieldErrors.code}</small> : null}
           </label>
           <label className="label" htmlFor="party-name">
             Name
@@ -107,9 +143,13 @@ function PartyPage({
               id="party-name"
               className="input"
               value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
+              onChange={(e) => {
+                setForm({ ...form, name: e.target.value });
+                if (fieldErrors.name) setFieldErrors((p) => ({ ...p, name: '' }));
+              }}
+              aria-invalid={Boolean(fieldErrors.name)}
             />
+            {fieldErrors.name ? <small className="field-error">{fieldErrors.name}</small> : null}
           </label>
           <label className="label" htmlFor="party-email">
             Email
@@ -118,8 +158,13 @@ function PartyPage({
               className="input"
               type="email"
               value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
+              onChange={(e) => {
+                setForm({ ...form, email: e.target.value });
+                if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: '' }));
+              }}
+              aria-invalid={Boolean(fieldErrors.email)}
             />
+            {fieldErrors.email ? <small className="field-error">{fieldErrors.email}</small> : null}
           </label>
           <label className="label" htmlFor="party-phone">
             Phone
@@ -146,13 +191,13 @@ function PartyPage({
       ) : null}
       <div className="card">
         <div className="table-wrap">
-          <table className="table">
+          <table className="table cards" aria-label={title}>
             <thead>
               <tr>
-                <th>Code</th>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Phone</th>
+                <SortableTh label="Code" sortKey="code" sort={sort} onSort={toggle} />
+                <SortableTh label="Name" sortKey="name" sort={sort} onSort={toggle} />
+                <SortableTh label="Email" sortKey="email" sort={sort} onSort={toggle} />
+                <SortableTh label="Phone" sortKey="phone" sort={sort} onSort={toggle} />
                 <th />
               </tr>
             </thead>
@@ -160,11 +205,11 @@ function PartyPage({
               {list.isLoading ? <SkeletonRows rows={4} cols={5} /> : null}
               {rows.map((row) => (
                 <tr key={row.id}>
-                  <td>{row.code}</td>
-                  <td>{row.name}</td>
-                  <td>{row.email ?? '—'}</td>
-                  <td>{row.phone ?? '—'}</td>
-                  <td>
+                  <td data-label="Code">{row.code}</td>
+                  <td data-label="Name"><span className="cell-ellipsis" title={row.name}>{row.name}</span></td>
+                  <td data-label="Email"><span className="cell-ellipsis" title={row.email ?? ''}>{row.email ?? '—'}</span></td>
+                  <td data-label="Phone">{row.phone ?? '—'}</td>
+                  <td data-label="Actions">
                     {canWrite ? (
                     <div className="row">
                       <button
@@ -184,10 +229,11 @@ function PartyPage({
                       </button>
                       <button
                         type="button"
-                        className="btn secondary"
+                        className="btn secondary danger"
+                        disabled={remove.isPending && remove.variables === row.id}
                         onClick={async () => {
                           const ok = await confirm({
-                            title: `Delete ${title.toLowerCase().replace(/s$/, '')}`,
+                            title: `Delete ${singular.toLowerCase()}`,
                             message: `Delete "${row.name}"? This cannot be undone.`,
                             confirmLabel: 'Delete',
                             danger: true,
@@ -195,7 +241,7 @@ function PartyPage({
                           if (ok) remove.mutate(row.id);
                         }}
                       >
-                        Delete
+                        {remove.isPending && remove.variables === row.id ? 'Deleting…' : 'Delete'}
                       </button>
                     </div>
                     ) : null}

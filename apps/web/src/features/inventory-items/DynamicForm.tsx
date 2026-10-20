@@ -33,13 +33,14 @@ type Props = {
   fields: FieldDefinition[];
   values: Record<string, unknown>;
   onChange: (values: Record<string, unknown>) => void;
+  errors?: Record<string, string>;
 };
 
 function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
-export function DynamicForm({ fields, values, onChange }: Props) {
+export function DynamicForm({ fields, values, onChange, errors }: Props) {
   const visible = fields.filter((f) => f.isActive !== false && f.isVisible !== false);
 
   function set(key: string, value: unknown) {
@@ -69,6 +70,9 @@ export function DynamicForm({ fields, values, onChange }: Props) {
               )}
             </label>
             {field.description ? <small className="field-help">{field.description}</small> : null}
+            {errors?.[field.key] ? (
+              <small className="field-error">{errors[field.key]}</small>
+            ) : null}
           </div>
         );
       })}

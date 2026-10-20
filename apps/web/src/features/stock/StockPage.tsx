@@ -6,7 +6,10 @@ import { useToast } from '../../shared/toast';
 import { useAuth } from '../../shared/auth';
 import { SkeletonRows } from '../../shared/Skeleton';
 import { formatNumber } from '../../shared/format';
+import { SortableTh, useClientSort } from '../../shared/SortHeader';
 import { useSearchParams } from 'react-router-dom';
+
+type TxSortKey = 'createdAt' | 'type' | 'item' | 'inventoryType' | 'quantity' | 'quantityAfter';
 
 type Party = { id: string; code: string; name: string };
 type InventoryType = { id: string; code: string; name: string };
@@ -20,7 +23,7 @@ type Item = {
 
 type StockTx = {
   id: string;
-  type: 'PURCHASE' | 'SALE';
+  type: 'PURCHASE' | 'SALE' | 'ADJUSTMENT';
   quantity: string | number;
   quantityBefore: string | number;
   quantityAfter: string | number;
@@ -35,7 +38,7 @@ type StockTx = {
 };
 
 type Filters = {
-  type: '' | 'PURCHASE' | 'SALE';
+  type: '' | 'PURCHASE' | 'SALE' | 'ADJUSTMENT';
   inventoryTypeId: string;
   inventoryItemId: string;
   supplierId: string;
@@ -81,9 +84,16 @@ export function StockPage() {
   const { user } = useAuth();
   const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
   const [searchParams, setSearchParams] = useSearchParams();
-  const [mode, setMode] = useState<'buy' | 'sell'>('buy');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [mode, setMode] = useState<'buy' | 'sell' | 'adjust'>('buy');
   const [filters, setFilters] = useState<Filters>(() => filtersFromParams(searchParams));
   const [applied, setApplied] = useState<Filters>(() => filtersFromParams(searchParams));
+  const [txPage, setTxPage] = useState(1);
+  const { sort: txSort, toggle: toggleTxSort } = useClientSort<TxSortKey>({
+    key: 'createdAt',
+    dir: 'desc',
+  });
+  const TX_PAGE_SIZE = 25;
   const [form, setForm] = useState({
     inventoryItemId: '',
     partyId: '',
@@ -99,6 +109,9 @@ export function StockPage() {
 
   const itemsQuery = useQuery({
     queryKey: ['items', 'stock'],
+    // Always refetch so a just-created item appears in the Buy/Sell dropdown (E3).
+    staleTime: 0,
+    refetchOnMount: 'always',
     queryFn: async () =>
       (await api<Item[]>('/inventory-items?pageSize=100')).data,
   });
@@ -113,12 +126,16 @@ export function StockPage() {
     queryFn: async () => (await api<Party[]>('/buyers?pageSize=100')).data,
   });
 
-  const txQueryKey = useMemo(() => ['stock-transactions', applied], [applied]);
+  const txQueryKey = useMemo(
+    () => ['stock-transactions', applied, txPage, txSort],
+    [applied, txPage, txSort],
+  );
 
   const txQuery = useQuery({
     queryKey: txQueryKey,
     queryFn: async () => {
-      const qs = new URLSearchParams({ pageSize: '50' });
+      const qs = new URLSearchParams({ pageSize: String(TX_PAGE_SIZE), page: String(txPage) });
+      if (txSort) qs.set('sort', `${txSort.key}:${txSort.dir}`);
       if (applied.type) qs.set('type', applied.type);
       if (applied.inventoryTypeId) qs.set('inventoryTypeId', applied.inventoryTypeId);
       if (applied.inventoryItemId) qs.set('inventoryItemId', applied.inventoryItemId);
@@ -136,6 +153,16 @@ export function StockPage() {
 
   const mutate = useMutation({
     mutationFn: async () => {
+      if (mode === 'adjust') {
+        return api('/stock-transactions/adjust', {
+          method: 'POST',
+          body: JSON.stringify({
+            inventoryItemId: form.inventoryItemId,
+            newQuantity: Number(form.quantity),
+            reason: form.notes,
+          }),
+        });
+      }
       const payload = {
         inventoryItemId: form.inventoryItemId,
         quantity: Number(form.quantity),
@@ -154,7 +181,9 @@ export function StockPage() {
       qc.invalidateQueries({ queryKey: ['stock-transactions'] });
       qc.invalidateQueries({ queryKey: ['items'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
-      toast.success(mode === 'buy' ? 'Purchase recorded' : 'Sale recorded');
+      toast.success(
+        mode === 'buy' ? 'Purchase recorded' : mode === 'sell' ? 'Sale recorded' : 'Stock adjusted',
+      );
       setForm({
         inventoryItemId: '',
         partyId: '',
@@ -174,6 +203,7 @@ export function StockPage() {
   function applyFilters(e: FormEvent) {
     e.preventDefault();
     setApplied({ ...filters });
+    setTxPage(1);
     setSearchParams(paramsFromFilters(filters), { replace: true });
   }
 
@@ -219,6 +249,16 @@ export function StockPage() {
           >
             Sell stock
           </button>
+          <button
+            type="button"
+            className={`btn${mode === 'adjust' ? '' : ' secondary'}`}
+            onClick={() => {
+              setMode('adjust');
+              setForm((f) => ({ ...f, partyId: '', unitPrice: '' }));
+            }}
+          >
+            Adjust stock
+          </button>
         </div>
 
         <form className="grid cols-2" onSubmit={onSubmit}>
@@ -239,29 +279,31 @@ export function StockPage() {
             </select>
           </label>
 
-          <label className="label">
-            {mode === 'buy' ? 'Supplier' : 'Buyer'}
-            <select
-              className="select"
-              value={form.partyId}
-              onChange={(e) => setForm({ ...form, partyId: e.target.value })}
-              required
-            >
-              <option value="">Select…</option>
-              {(mode === 'buy' ? suppliersQuery.data : buyersQuery.data)?.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.code} — {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {mode !== 'adjust' ? (
+            <label className="label">
+              {mode === 'buy' ? 'Supplier' : 'Buyer'}
+              <select
+                className="select"
+                value={form.partyId}
+                onChange={(e) => setForm({ ...form, partyId: e.target.value })}
+                required
+              >
+                <option value="">Select…</option>
+                {(mode === 'buy' ? suppliersQuery.data : buyersQuery.data)?.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.code} — {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
 
           <label className="label">
-            Quantity
+            {mode === 'adjust' ? 'New quantity' : 'Quantity'}
             <input
               className="input"
               type="number"
-              min="0.0001"
+              min="0"
               step="any"
               value={form.quantity}
               onChange={(e) => setForm({ ...form, quantity: e.target.value })}
@@ -269,24 +311,28 @@ export function StockPage() {
             />
           </label>
 
-          <label className="label">
-            Unit price (optional)
-            <input
-              className="input"
-              type="number"
-              min="0"
-              step="any"
-              value={form.unitPrice}
-              onChange={(e) => setForm({ ...form, unitPrice: e.target.value })}
-            />
-          </label>
+          {mode !== 'adjust' ? (
+            <label className="label">
+              Unit price (optional)
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="any"
+                value={form.unitPrice}
+                onChange={(e) => setForm({ ...form, unitPrice: e.target.value })}
+              />
+            </label>
+          ) : null}
 
           <label className="label label-span">
-            Notes
+            {mode === 'adjust' ? 'Reason (required)' : 'Notes'}
             <textarea
               className="textarea"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              required={mode === 'adjust'}
+              placeholder={mode === 'adjust' ? 'e.g. cycle count correction, damage, found stock…' : undefined}
             />
           </label>
 
@@ -302,7 +348,13 @@ export function StockPage() {
 
           <div className="row actions label-span">
             <button className="btn" type="submit" disabled={mutate.isPending}>
-              {mode === 'buy' ? 'Confirm purchase' : 'Confirm sale'}
+              {mutate.isPending
+                ? 'Working…'
+                : mode === 'buy'
+                  ? 'Confirm purchase'
+                  : mode === 'sell'
+                    ? 'Confirm sale'
+                    : 'Apply adjustment'}
             </button>
           </div>
         </form>
@@ -311,7 +363,19 @@ export function StockPage() {
 
       <div className="card stack">
         <h3 className="page-title">Transaction logs</h3>
-        <form className="grid cols-2 filters" onSubmit={applyFilters}>
+        <button
+          type="button"
+          className="btn secondary collapse-toggle"
+          aria-expanded={filtersOpen}
+          onClick={() => setFiltersOpen((o) => !o)}
+        >
+          <span>Filters</span>
+          <span className="chev" aria-hidden>▾</span>
+        </button>
+        <form
+          className={`grid cols-2 filters collapsible${filtersOpen ? '' : ' collapsed'}`}
+          onSubmit={applyFilters}
+        >
           <label className="label">
             Type
             <select
@@ -324,6 +388,7 @@ export function StockPage() {
               <option value="">All</option>
               <option value="PURCHASE">Purchase</option>
               <option value="SALE">Sale</option>
+              <option value="ADJUSTMENT">Adjustment</option>
             </select>
           </label>
 
@@ -467,17 +532,17 @@ export function StockPage() {
         ) : null}
 
         <div className="table-wrap">
-          <table className="table">
+          <table className="table cards" aria-label="Stock transactions">
             <thead>
               <tr>
-                <th>When</th>
-                <th>Type</th>
-                <th>Item</th>
-                <th>Item type</th>
+                <SortableTh label="When" sortKey="createdAt" sort={txSort} onSort={toggleTxSort} />
+                <SortableTh label="Type" sortKey="type" sort={txSort} onSort={toggleTxSort} />
+                <SortableTh label="Item" sortKey="item" sort={txSort} onSort={toggleTxSort} />
+                <SortableTh label="Item type" sortKey="inventoryType" sort={txSort} onSort={toggleTxSort} />
                 <th>Party</th>
-                <th>Qty</th>
+                <SortableTh label="Qty" sortKey="quantity" sort={txSort} onSort={toggleTxSort} />
                 <th>Before</th>
-                <th>After</th>
+                <SortableTh label="After" sortKey="quantityAfter" sort={txSort} onSort={toggleTxSort} />
                 <th>Value</th>
                 <th>By</th>
               </tr>
@@ -486,29 +551,31 @@ export function StockPage() {
               {txQuery.isLoading ? <SkeletonRows rows={6} cols={10} /> : null}
               {(txQuery.data?.data ?? []).map((row) => (
                 <tr key={row.id}>
-                  <td className="num">{new Date(row.createdAt).toLocaleString()}</td>
-                  <td>{row.type === 'PURCHASE' ? 'Buy' : 'Sell'}</td>
-                  <td>
+                  <td className="num" data-label="When">{new Date(row.createdAt).toLocaleString()}</td>
+                  <td data-label="Type">
+                    {row.type === 'PURCHASE' ? 'Buy' : row.type === 'SALE' ? 'Sell' : 'Adjust'}
+                  </td>
+                  <td data-label="Item">
                     <span className="cell-stack">
                       {row.inventoryItem.sku}
                       <span className="muted">{row.inventoryItem.name}</span>
                     </span>
                   </td>
-                  <td>{row.inventoryType.name}</td>
-                  <td>
+                  <td data-label="Item type">{row.inventoryType.name}</td>
+                  <td data-label="Party">
                     {row.type === 'PURCHASE'
                       ? row.supplier?.name ?? '—'
                       : row.buyer?.name ?? '—'}
                   </td>
-                  <td className="num">{formatNum(row.quantity)}</td>
-                  <td className="num">{formatNum(row.quantityBefore)}</td>
-                  <td className="num">{formatNum(row.quantityAfter)}</td>
-                  <td className="num">
+                  <td className="num" data-label="Qty">{formatNum(row.quantity)}</td>
+                  <td className="num" data-label="Before">{formatNum(row.quantityBefore)}</td>
+                  <td className="num" data-label="After">{formatNum(row.quantityAfter)}</td>
+                  <td className="num" data-label="Value">
                     {row.unitPrice != null && row.unitPrice !== ''
                       ? formatNum(Number(row.quantity) * Number(row.unitPrice))
                       : '—'}
                   </td>
-                  <td>{row.createdBy?.fullName ?? '—'}</td>
+                  <td data-label="By">{row.createdBy?.fullName ?? '—'}</td>
                 </tr>
               ))}
               {!txQuery.isLoading && !(txQuery.data?.data?.length ?? 0) ? (
@@ -521,6 +588,33 @@ export function StockPage() {
             </tbody>
           </table>
         </div>
+
+        {txQuery.data?.meta && (txQuery.data.meta.totalPages ?? 1) > 1 ? (
+          <div className="row spread pagination">
+            <span className="muted">
+              Page {txQuery.data.meta.page} of {txQuery.data.meta.totalPages} ·{' '}
+              {txQuery.data.meta.total} transactions
+            </span>
+            <div className="row">
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={txPage <= 1}
+                onClick={() => setTxPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={txPage >= (txQuery.data.meta.totalPages ?? 1)}
+                onClick={() => setTxPage((p) => p + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -1,6 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { api, toErrorMessage } from '../../shared/api';
 import { SkeletonRows } from '../../shared/Skeleton';
+import { SortableTh, sortRows, useClientSort } from '../../shared/SortHeader';
+
+type AuditKey = 'createdAt' | 'actor' | 'action' | 'entityType';
 
 type AuditRow = {
   id: string;
@@ -13,12 +16,17 @@ type AuditRow = {
 };
 
 export function AuditPage() {
+  const { sort, toggle } = useClientSort<AuditKey>({ key: 'createdAt', dir: 'desc' });
   const { data, isLoading, error } = useQuery({
     queryKey: ['audit'],
     queryFn: async () => (await api<AuditRow[]>('/audit-logs?pageSize=50')).data,
   });
 
   if (error) return <p className="error">{toErrorMessage(error)}</p>;
+
+  const rows = sortRows(data ?? [], sort, (r, k) =>
+    k === 'actor' ? r.actor?.fullName ?? '' : k === 'createdAt' ? r.createdAt : (r[k] as string),
+  );
 
   return (
     <div className="stack">
@@ -30,13 +38,13 @@ export function AuditPage() {
       </div>
       <div className="card">
         <div className="table-wrap">
-          <table className="table">
+          <table className="table cards" aria-label="Audit log">
             <thead>
               <tr>
-                <th>When</th>
-                <th>Actor</th>
-                <th>Action</th>
-                <th>Entity</th>
+                <SortableTh label="When" sortKey="createdAt" sort={sort} onSort={toggle} />
+                <SortableTh label="Actor" sortKey="actor" sort={sort} onSort={toggle} />
+                <SortableTh label="Action" sortKey="action" sort={sort} onSort={toggle} />
+                <SortableTh label="Entity" sortKey="entityType" sort={sort} onSort={toggle} />
                 <th>Summary</th>
               </tr>
             </thead>
@@ -44,18 +52,29 @@ export function AuditPage() {
               {isLoading ? (
                 <SkeletonRows rows={6} cols={5} />
               ) : (
-                (data ?? []).map((row) => (
+                rows.map((row) => (
                   <tr key={row.id}>
-                    <td>{new Date(row.createdAt).toLocaleString()}</td>
-                    <td>{row.actor?.fullName ?? '—'}</td>
-                    <td>{row.action}</td>
-                    <td>
+                    <td data-label="When">{new Date(row.createdAt).toLocaleString()}</td>
+                    <td data-label="Actor">{row.actor?.fullName ?? '—'}</td>
+                    <td data-label="Action">{row.action}</td>
+                    <td data-label="Entity">
                       <span className="cell-stack">
                         {row.entityType}
-                        <span className="muted entity-id">{row.entityId}</span>
+                        <span className="muted entity-id" title={row.entityId}>
+                          {row.entityId.slice(0, 8)}…
+                        </span>
+                        <button
+                          type="button"
+                          className="copy-id"
+                          title="Copy full id"
+                          aria-label="Copy entity id"
+                          onClick={() => navigator.clipboard?.writeText(row.entityId)}
+                        >
+                          ⧉
+                        </button>
                       </span>
                     </td>
-                    <td>{row.summary ?? '—'}</td>
+                    <td data-label="Summary">{row.summary ?? '—'}</td>
                   </tr>
                 ))
               )}

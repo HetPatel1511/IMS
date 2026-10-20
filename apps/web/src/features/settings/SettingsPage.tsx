@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasMinRole, type UserRole } from '@ims/shared';
 import { api, toErrorMessage } from '../../shared/api';
@@ -22,16 +22,19 @@ export function SettingsPage() {
 
   const settings = useQuery({
     queryKey: ['settings'],
-    queryFn: async () => {
-      const rows = (await api<Setting[]>('/settings')).data;
-      const org = rows.find((r) => r.key === 'org');
-      if (org?.value) {
-        setOrgName(String(org.value.name ?? ''));
-        setDefaultUnit(String(org.value.defaultUnit ?? 'pcs'));
-      }
-      return rows;
-    },
+    queryFn: async () => (await api<Setting[]>('/settings')).data,
   });
+
+  // Prefill the form from the loaded settings. Doing this in an effect (rather than
+  // inside queryFn) ensures it runs even when the query is served from cache — e.g.
+  // after AppLayout has already fetched /settings — so the fields are never left blank.
+  useEffect(() => {
+    const org = settings.data?.find((r) => r.key === 'org');
+    if (org?.value) {
+      setOrgName(String(org.value.name ?? ''));
+      setDefaultUnit(String(org.value.defaultUnit ?? 'pcs'));
+    }
+  }, [settings.data]);
 
   const save = useMutation({
     mutationFn: async () =>
@@ -88,7 +91,7 @@ export function SettingsPage() {
       <div className="card stack">
         <h3 className="page-title">All settings</h3>
         <div className="table-wrap">
-          <table className="table compact">
+          <table className="table compact cards">
             <thead>
               <tr>
                 <th>Key</th>
@@ -99,15 +102,15 @@ export function SettingsPage() {
             <tbody>
               {(settings.data ?? []).map((row) => (
                 <tr key={row.id}>
-                  <td>{row.key}</td>
-                  <td>
+                  <td data-label="Key">{row.key}</td>
+                  <td data-label="Value">
                     {Object.entries(row.value ?? {}).map(([k, v]) => (
                       <div key={k}>
                         <span className="muted">{k}:</span> {String(v)}
                       </div>
                     ))}
                   </td>
-                  <td className="muted">{row.description ?? '—'}</td>
+                  <td className="muted" data-label="Description">{row.description ?? '—'}</td>
                 </tr>
               ))}
               {settings.data && settings.data.length === 0 ? (

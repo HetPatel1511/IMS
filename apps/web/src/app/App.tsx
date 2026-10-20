@@ -4,6 +4,7 @@ import { AuthProvider } from '../shared/auth';
 import { ToastProvider, emitToast } from '../shared/toast';
 import { toErrorMessage } from '../shared/api';
 import { ConfirmProvider } from '../shared/confirm';
+import '../shared/theme';
 import { AppLayout } from './AppLayout';
 import { LoginPage } from '../features/auth/LoginPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';

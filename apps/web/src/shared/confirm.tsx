@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useFocusTrap } from './useFocusTrap';
 
 type ConfirmOptions = {
   title?: string;
@@ -25,6 +26,7 @@ type Pending = ConfirmOptions & { resolve: (ok: boolean) => void };
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const confirmBtn = useRef<HTMLButtonElement>(null);
+  const trapRef = useFocusTrap<HTMLDivElement>(Boolean(pending));
 
   const confirm = useCallback<ConfirmFn>((opts) => {
     return new Promise<boolean>((resolve) => {
@@ -58,6 +60,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       {pending ? (
         <div className="modal-backdrop" onClick={() => close(false)}>
           <div
+            ref={trapRef}
             className="modal card stack confirm-dialog"
             role="alertdialog"
             aria-modal="true"

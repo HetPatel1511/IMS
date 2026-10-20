@@ -33,19 +33,36 @@ export function emitToast(kind: ToastKind, message: string) {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const seq = useRef(0);
+  const timers = useRef<Record<number, number>>({});
 
   const remove = useCallback((id: number) => {
+    window.clearTimeout(timers.current[id]);
+    delete timers.current[id];
     setToasts((list) => list.filter((t) => t.id !== id));
   }, []);
+
+  const arm = useCallback(
+    (id: number, kind: ToastKind) => {
+      window.clearTimeout(timers.current[id]);
+      timers.current[id] = window.setTimeout(() => remove(id), kind === 'error' ? 6000 : 3500);
+    },
+    [remove],
+  );
 
   const push = useCallback(
     (kind: ToastKind, message: string) => {
       const id = ++seq.current;
       setToasts((list) => [...list, { id, kind, message }]);
-      window.setTimeout(() => remove(id), kind === 'error' ? 6000 : 3500);
+      arm(id, kind);
     },
-    [remove],
+    [arm],
   );
+
+  const clearAll = useCallback(() => {
+    Object.values(timers.current).forEach((t) => window.clearTimeout(t));
+    timers.current = {};
+    setToasts([]);
+  }, []);
 
   const api = useMemo<ToastApi>(
     () => ({
@@ -62,8 +79,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={api}>
       {children}
       <div className="toast-stack" role="region" aria-live="polite" aria-label="Notifications">
+        {toasts.length > 1 ? (
+          <button type="button" className="toast-dismiss-all" onClick={clearAll}>
+            Dismiss all ({toasts.length})
+          </button>
+        ) : null}
         {toasts.map((t) => (
-          <div key={t.id} className={`toast toast-${t.kind}`} role="status">
+          <div
+            key={t.id}
+            className={`toast toast-${t.kind}`}
+            role="status"
+            onMouseEnter={() => window.clearTimeout(timers.current[t.id])}
+            onMouseLeave={() => arm(t.id, t.kind)}
+          >
             <span>{t.message}</span>
             <button
               type="button"
