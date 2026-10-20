@@ -22,6 +22,7 @@ type Props = {
   fields: FieldDefinition[];
   onEdit?: (id: string) => void;
   onDelete?: (id: string, label: string) => void;
+  onHistory?: (id: string, label: string) => void;
   loading?: boolean;
   sort?: SortState;
   onSort?: (key: SortKey) => void;
@@ -49,6 +50,7 @@ export function DynamicTable({
   fields,
   onEdit,
   onDelete,
+  onHistory,
   loading,
   sort,
   onSort,
@@ -118,6 +120,15 @@ export function DynamicTable({
                 ))}
                 <td data-label="Actions">
                   <div className="row">
+                    {onHistory ? (
+                      <button
+                        type="button"
+                        className="btn secondary"
+                        onClick={() => onHistory(item.id, item.name)}
+                      >
+                        History
+                      </button>
+                    ) : null}
                     {onEdit ? (
                       <button type="button" className="btn secondary" onClick={() => onEdit(item.id)}>
                         Edit

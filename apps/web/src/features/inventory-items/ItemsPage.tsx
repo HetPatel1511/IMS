@@ -21,7 +21,24 @@ type Item = {
   inventoryType?: { name: string };
 };
 
+type StockTx = {
+  id: string;
+  type: 'PURCHASE' | 'SALE' | 'ADJUSTMENT';
+  quantity: number | string;
+  quantityAfter: number | string;
+  notes?: string | null;
+  createdAt: string;
+  supplier?: { name: string } | null;
+  buyer?: { name: string } | null;
+};
+
 const PAGE_SIZE = 20;
+
+const TX_LABEL: Record<StockTx['type'], string> = {
+  PURCHASE: 'Buy',
+  SALE: 'Sell',
+  ADJUSTMENT: 'Adjust',
+};
 
 const emptyForm = {
   sku: '',
@@ -59,6 +76,29 @@ export function ItemsPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const dirtyRef = useRef(false);
   const trapRef = useFocusTrap<HTMLDivElement>(dialogOpen);
+
+  // Per-item movement history drawer (v3 A4): reuses the stock-transactions list,
+  // filtered to one item, so edits can be explained by the quantity changes behind them.
+  const [historyItem, setHistoryItem] = useState<{ id: string; label: string } | null>(null);
+  const historyTrapRef = useFocusTrap<HTMLDivElement>(Boolean(historyItem));
+  const historyQuery = useQuery({
+    queryKey: ['item-history', historyItem?.id],
+    enabled: Boolean(historyItem),
+    queryFn: async () =>
+      (
+        await api<StockTx[]>(
+          `/stock-transactions?inventoryItemId=${historyItem!.id}&pageSize=50&sort=createdAt:desc`,
+        )
+      ).data,
+  });
+  useEffect(() => {
+    if (!historyItem) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHistoryItem(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [historyItem]);
 
   // Mark the form dirty + update it (used by user-facing inputs).
   function change(patch: Partial<typeof emptyForm>) {
@@ -352,6 +392,7 @@ export function ItemsPage() {
                 : { key, dir: 'asc' },
             )
           }
+          onHistory={(id, label) => setHistoryItem({ id, label })}
           onEdit={canWrite ? (id) => void openEdit(id) : undefined}
           onDelete={!canWrite ? undefined : async (id, label) => {
             const ok = await confirm({
@@ -533,6 +574,68 @@ export function ItemsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {historyItem ? (
+        <div className="modal-backdrop" onClick={() => setHistoryItem(null)}>
+          <div
+            ref={historyTrapRef}
+            className="modal card stack"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Movement history for ${historyItem.label}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="row spread">
+              <div>
+                <h3 className="page-title">Movement history</h3>
+                <p className="modal-subtitle">{historyItem.label}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Close"
+                onClick={() => setHistoryItem(null)}
+              >
+                ×
+              </button>
+            </div>
+            {historyQuery.isLoading ? (
+              <p className="muted">Loading…</p>
+            ) : (historyQuery.data ?? []).length === 0 ? (
+              <p className="muted">No stock movements recorded for this item yet.</p>
+            ) : (
+              <div className="table-wrap">
+                <table className="table cards" aria-label={`Movements for ${historyItem.label}`}>
+                  <thead>
+                    <tr>
+                      <th>When</th>
+                      <th>Type</th>
+                      <th>Qty</th>
+                      <th>After</th>
+                      <th>Party / reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(historyQuery.data ?? []).map((tx) => (
+                      <tr key={tx.id}>
+                        <td data-label="When">{new Date(tx.createdAt).toLocaleString()}</td>
+                        <td data-label="Type">{TX_LABEL[tx.type]}</td>
+                        <td className="num" data-label="Qty">{String(tx.quantity)}</td>
+                        <td className="num" data-label="After">{String(tx.quantityAfter)}</td>
+                        <td data-label="Party / reason">
+                          {tx.type === 'ADJUSTMENT'
+                            ? tx.notes || '—'
+                            : tx.supplier?.name ?? tx.buyer?.name ?? tx.notes ?? '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       ) : null}

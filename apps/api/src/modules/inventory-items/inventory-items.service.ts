@@ -80,6 +80,7 @@ export class InventoryItemsService {
     query: PaginationQueryDto & {
       inventoryTypeId?: string;
       categoryId?: string;
+      belowReorder?: boolean;
       attr?: Record<string, string>;
     },
   ) {
@@ -88,6 +89,20 @@ export class InventoryItemsService {
       inventoryTypeId: query.inventoryTypeId,
       categoryId: query.categoryId,
     };
+
+    // Low-stock filter: Prisma can't compare two columns in `where`, so resolve the
+    // matching ids with a raw query (mirrors the dashboard count) and constrain by them.
+    if (query.belowReorder) {
+      const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id
+        FROM inventory_items
+        WHERE deleted_at IS NULL
+          AND is_active = TRUE
+          AND quantity <= min_quantity
+          ${query.inventoryTypeId ? Prisma.sql`AND inventory_type_id = ${query.inventoryTypeId}::uuid` : Prisma.empty}
+      `;
+      where.id = { in: rows.map((r) => r.id) };
+    }
 
     if (query.q) {
       where.OR = [
@@ -125,7 +140,7 @@ export class InventoryItemsService {
         where,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: query.belowReorder ? { quantity: 'asc' } : { updatedAt: 'desc' },
         include: this.defaultInclude(),
       }),
     ]);

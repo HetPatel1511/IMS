@@ -46,7 +46,7 @@ function NavIcon({ name }: { name: string }) {
 }
 
 export function AppLayout() {
-  const { user, loading, logout } = useAuth();
+  const { user, token, loading, logout } = useAuth();
   const location = useLocation();
   const [navOpen, setNavOpen] = useState(false);
   const [railed, setRailed] = useState<boolean>(() => {
@@ -65,9 +65,12 @@ export function AppLayout() {
   const pageTitle = NAV.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))?.label ?? 'IMS';
 
   // Configure app-wide number/locale formatting from org settings.
+  // Gate on the access token too: `user` is restored synchronously from localStorage on
+  // reload, but the token is fetched asynchronously by bootstrapSession(), so firing on
+  // `user` alone sent this request unauthenticated and produced a transient 401 (v3 A1).
   const settings = useQuery({
     queryKey: ['settings'],
-    enabled: Boolean(user),
+    enabled: Boolean(user) && Boolean(token),
     queryFn: async () => (await api<OrgSetting[]>('/settings')).data,
   });
   useEffect(() => {

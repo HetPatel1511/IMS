@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FIELD_TYPES, hasMinRole, type FieldType, type UserRole } from '@ims/shared';
 import { api, toErrorMessage } from '../../shared/api';
@@ -127,6 +127,7 @@ export function InventoryTypesPage() {
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
+  const fieldFormRef = useRef<HTMLFormElement>(null);
 
   const typesQuery = useQuery({
     queryKey: ['inventory-types'],
@@ -303,6 +304,12 @@ export function InventoryTypesPage() {
       targetTypeId: typeof f.ui?.targetTypeId === 'string' ? (f.ui.targetTypeId as string) : '',
       options: f.options ?? [],
     });
+    // The field form sits above the table; bring it into view and focus it so editing
+    // is obviously responsive even when the fields list is long.
+    requestAnimationFrame(() => {
+      fieldFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById('field-name')?.focus();
+    });
   }
 
   function onSaveType(e: FormEvent) {
@@ -319,6 +326,8 @@ export function InventoryTypesPage() {
     saveField.mutate();
   }
 
+  const selectedTypeName =
+    typesQuery.data?.find((t) => t.id === selectedId)?.name ?? '';
   const showOptions = OPTION_TYPES.has(field.fieldType);
   const showNumeric = NUMERIC_TYPES.has(field.fieldType);
   const showText = TEXT_TYPES.has(field.fieldType);
@@ -477,9 +486,19 @@ export function InventoryTypesPage() {
               ) : null}
             </div>
           ) : (
-            <>
-              {canWrite ? (
-              <form className="stack" onSubmit={onSaveField}>
+            <p className="muted">
+              Editing <strong>{selectedTypeName}</strong> — define and manage its fields
+              below.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {selectedId ? (
+        <div className="card stack">
+          <h3 className="page-title">Fields — {selectedTypeName}</h3>
+          {canWrite ? (
+              <form ref={fieldFormRef} className="stack" onSubmit={onSaveField}>
                 <div className="grid cols-2">
                   <label className="label" htmlFor="field-key">
                     Key
@@ -782,9 +801,8 @@ export function InventoryTypesPage() {
                 </div>
               </form>
               ) : null}
-
-              <div className="table-wrap">
-                <table className="table cards" aria-label="Fields">
+          <div className="table-wrap">
+            <table className="table cards" aria-label="Fields">
                   <thead>
                     <tr>
                       <th>Order</th>
@@ -826,8 +844,19 @@ export function InventoryTypesPage() {
                               <button
                                 type="button"
                                 className="drag-handle"
-                                aria-label={`Drag to reorder ${f.displayName}`}
-                                title="Drag to reorder"
+                                aria-label={`Reorder ${f.displayName}. Use arrow up or down keys to move.`}
+                                aria-keyshortcuts="ArrowUp ArrowDown"
+                                title="Drag, or focus and press ↑/↓ to reorder"
+                                disabled={reorderFields.isPending}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'ArrowUp') {
+                                    e.preventDefault();
+                                    moveField(idx, -1);
+                                  } else if (e.key === 'ArrowDown') {
+                                    e.preventDefault();
+                                    moveField(idx, 1);
+                                  }
+                                }}
                               >
                                 ⠿
                               </button>
@@ -904,11 +933,9 @@ export function InventoryTypesPage() {
                     ) : null}
                   </tbody>
                 </table>
-              </div>
-            </>
-          )}
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

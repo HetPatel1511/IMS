@@ -33,12 +33,9 @@ export function DashboardPage() {
   const lowStockQuery = useQuery({
     queryKey: ['dashboard', 'low-stock'],
     enabled: (data?.lowStockItems ?? 0) > 0,
-    queryFn: async () => {
-      const all = (await api<LowItem[]>('/inventory-items?pageSize=100')).data;
-      return all
-        .filter((i) => Number(i.quantity) <= Number(i.minQuantity))
-        .sort((a, b) => Number(a.quantity) - Number(b.quantity));
-    },
+    queryFn: async () =>
+      // Server-side low-stock filter (v3 A5) — no longer pulls every item to filter client-side.
+      (await api<LowItem[]>('/inventory-items?belowReorder=1&pageSize=100')).data,
   });
 
   if (isLoading) return <p className="muted">Loading dashboard…</p>;

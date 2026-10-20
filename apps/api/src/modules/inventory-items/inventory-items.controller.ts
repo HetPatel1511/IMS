@@ -12,7 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { IsOptional, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
 import { CurrentUser, Roles, type AuthUser } from '../../common/decorators/auth.decorators';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import {
@@ -30,6 +31,13 @@ class ItemListQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID()
   categoryId?: string;
+
+  // ?belowReorder=1 restricts the list to items at or below their reorder level,
+  // computed server-side (v3 A5) so the dashboard needn't pull every item and filter.
+  @IsOptional()
+  @Transform(({ value }) => value === '1' || value === 'true' || value === true)
+  @IsBoolean()
+  belowReorder?: boolean;
 }
 
 @ApiTags('inventory-items')
