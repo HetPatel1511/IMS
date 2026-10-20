@@ -354,7 +354,7 @@ export function InventoryTypesPage() {
         </div>
       </div>
 
-      <div className="grid split">
+      <div className="stack">
         <div className="card stack">
           <h3 className="page-title">Types</h3>
           {canWrite ? (
@@ -467,40 +467,6 @@ export function InventoryTypesPage() {
           </div>
         </div>
 
-        <div className="card stack">
-          <h3 className="page-title">Schema builder</h3>
-          {!selectedId ? (
-            <div className="empty-state">
-              <svg className="es-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M4 7h16M4 12h16M4 17h10" />
-                <path d="M18 15v6M15 18h6" />
-              </svg>
-              <h4>Build a type's fields</h4>
-              <p>
-                Pick an inventory type to add custom fields (text, numbers,
-                dropdowns, dates, files and more). Those fields become the attributes you
-                capture on every item of that type.
-              </p>
-              {canWrite && typesQuery.data?.length ? (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    setSelectedId(typesQuery.data![0].id);
-                    resetField();
-                  }}
-                >
-                  Start with “{typesQuery.data[0].name}”
-                </button>
-              ) : null}
-            </div>
-          ) : (
-            <p className="muted">
-              Editing <strong>{selectedTypeName}</strong> — define and manage its fields
-              below.
-            </p>
-          )}
-        </div>
       </div>
 
       {selectedId ? (

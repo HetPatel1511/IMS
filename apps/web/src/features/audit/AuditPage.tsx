@@ -13,7 +13,55 @@ type AuditRow = {
   summary?: string | null;
   createdAt: string;
   actor?: { email: string; fullName: string } | null;
+  beforeData?: Record<string, unknown> | null;
+  afterData?: Record<string, unknown> | null;
 };
+
+// Raw action enum → friendly verb.
+const ACTION_LABEL: Record<string, string> = {
+  CREATE: 'Created',
+  UPDATE: 'Updated',
+  DELETE: 'Deleted',
+  LOGIN: 'Signed in',
+  LOGOUT: 'Signed out',
+};
+
+// Raw table name → friendly, singular entity label.
+const ENTITY_LABEL: Record<string, string> = {
+  inventory_items: 'item',
+  inventory_types: 'inventory type',
+  field_definitions: 'field',
+  stock_transactions: 'stock movement',
+  suppliers: 'supplier',
+  buyers: 'buyer',
+  settings: 'setting',
+  users: 'user',
+  categories: 'category',
+};
+
+function entityLabel(entityType: string): string {
+  return ENTITY_LABEL[entityType] ?? entityType.replace(/_/g, ' ');
+}
+
+// Pick the most human identifier available from the record snapshot.
+function recordName(row: AuditRow): string | null {
+  const d = row.afterData ?? row.beforeData ?? null;
+  if (!d) return null;
+  const pick = (k: string) => (typeof d[k] === 'string' && d[k] ? (d[k] as string) : null);
+  const sku = pick('sku');
+  const name = pick('name') ?? pick('displayName');
+  if (sku && name) return `${sku} · ${name}`;
+  return sku ?? name ?? pick('code') ?? pick('key') ?? null;
+}
+
+// A readable, full-sentence description of the change.
+function describe(row: AuditRow): string {
+  if (row.summary) return row.summary;
+  const verb = ACTION_LABEL[row.action] ?? row.action.toLowerCase();
+  const label = entityLabel(row.entityType);
+  const name = recordName(row);
+  return name ? `${verb} ${label} “${name}”` : `${verb} ${label}`;
+}
 
 export function AuditPage() {
   const { sort, toggle } = useClientSort<AuditKey>({ key: 'createdAt', dir: 'desc' });
@@ -33,7 +81,7 @@ export function AuditPage() {
       <div className="page-header">
         <div>
           <h2 className="page-title">Audit Logs</h2>
-          <p className="muted">Append-only trail of metadata and inventory changes.</p>
+          <p className="muted">A plain-language history of who changed what, and when.</p>
         </div>
       </div>
       <div className="card">
@@ -42,41 +90,50 @@ export function AuditPage() {
             <thead>
               <tr>
                 <SortableTh label="When" sortKey="createdAt" sort={sort} onSort={toggle} />
-                <SortableTh label="Actor" sortKey="actor" sort={sort} onSort={toggle} />
+                <SortableTh label="Who" sortKey="actor" sort={sort} onSort={toggle} />
                 <SortableTh label="Action" sortKey="action" sort={sort} onSort={toggle} />
-                <SortableTh label="Entity" sortKey="entityType" sort={sort} onSort={toggle} />
-                <th>Summary</th>
+                <SortableTh label="Type" sortKey="entityType" sort={sort} onSort={toggle} />
+                <th>What changed</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <SkeletonRows rows={6} cols={5} />
               ) : (
-                rows.map((row) => (
-                  <tr key={row.id}>
-                    <td data-label="When">{new Date(row.createdAt).toLocaleString()}</td>
-                    <td data-label="Actor">{row.actor?.fullName ?? '—'}</td>
-                    <td data-label="Action">{row.action}</td>
-                    <td data-label="Entity">
-                      <span className="cell-stack">
-                        {row.entityType}
-                        <span className="muted entity-id" title={row.entityId}>
-                          {row.entityId.slice(0, 8)}…
+                rows.map((row) => {
+                  const when = new Date(row.createdAt);
+                  return (
+                    <tr key={row.id}>
+                      <td data-label="When">
+                        <span className="cell-stack">
+                          <span>{when.toLocaleDateString()}</span>
+                          <span className="muted audit-time">{when.toLocaleTimeString()}</span>
                         </span>
+                      </td>
+                      <td data-label="Who">{row.actor?.fullName ?? 'System'}</td>
+                      <td data-label="Action">
+                        <span className={`audit-badge audit-${row.action.toLowerCase()}`}>
+                          {ACTION_LABEL[row.action] ?? row.action}
+                        </span>
+                      </td>
+                      <td data-label="Type" className="audit-type">
+                        {entityLabel(row.entityType)}
+                      </td>
+                      <td data-label="What changed">
+                        <span className="audit-change">{describe(row)}</span>
                         <button
                           type="button"
-                          className="copy-id"
-                          title="Copy full id"
-                          aria-label="Copy entity id"
+                          className="audit-ref"
+                          title={`Copy record id (${row.entityId})`}
+                          aria-label="Copy record id"
                           onClick={() => navigator.clipboard?.writeText(row.entityId)}
                         >
                           ⧉
                         </button>
-                      </span>
-                    </td>
-                    <td data-label="Summary">{row.summary ?? '—'}</td>
-                  </tr>
-                ))
+                      </td>
+                    </tr>
+                  );
+                })
               )}
               {!isLoading && (data ?? []).length === 0 ? (
                 <tr>
