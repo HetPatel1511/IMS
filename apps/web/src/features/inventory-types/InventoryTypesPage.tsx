@@ -5,6 +5,7 @@ import { api, toErrorMessage } from '../../shared/api';
 import { useToast } from '../../shared/toast';
 import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
+import { FormModal } from '../../shared/FormModal';
 import type { FieldDefinition, FieldOption } from '../inventory-items/DynamicForm';
 
 type InventoryType = {
@@ -136,7 +137,12 @@ export function InventoryTypesPage() {
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
-  const fieldFormRef = useRef<HTMLFormElement>(null);
+  const [typeDialogOpen, setTypeDialogOpen] = useState(false);
+  const [typeDirty, setTypeDirty] = useState(false);
+  const [typeErrors, setTypeErrors] = useState<Record<string, string>>({});
+  const [fieldDialogOpen, setFieldDialogOpen] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const fieldSnapshotRef = useRef<string>('');
 
   const typesQuery = useQuery({
     queryKey: ['inventory-types'],
@@ -155,6 +161,34 @@ export function InventoryTypesPage() {
     setEditingTypeId(null);
   };
 
+  function changeType(patch: Partial<typeof newType>) {
+    setTypeDirty(true);
+    setNewType((t) => ({ ...t, ...patch }));
+  }
+
+  function openCreateType() {
+    setEditingTypeId(null);
+    setNewType({ code: '', name: '', description: '' });
+    setTypeErrors({});
+    setTypeDirty(false);
+    setTypeDialogOpen(true);
+  }
+
+  function openEditType(t: InventoryType) {
+    setEditingTypeId(t.id);
+    setNewType({ code: t.code, name: t.name, description: t.description ?? '' });
+    setTypeErrors({});
+    setTypeDirty(false);
+    setTypeDialogOpen(true);
+  }
+
+  function closeTypeDialog() {
+    setTypeDialogOpen(false);
+    resetType();
+    setTypeErrors({});
+    setTypeDirty(false);
+  }
+
   const saveType = useMutation({
     mutationFn: async () => {
       if (editingTypeId) {
@@ -169,7 +203,7 @@ export function InventoryTypesPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory-types'] });
       toast.success(editingTypeId ? 'Inventory type updated' : 'Inventory type created');
-      resetType();
+      closeTypeDialog();
     },
     onError: (e) => toast.error(toErrorMessage(e)),
   });
@@ -189,6 +223,20 @@ export function InventoryTypesPage() {
     setField(emptyField);
     setEditingFieldId(null);
   };
+
+  function openCreateField() {
+    setField(emptyField);
+    setEditingFieldId(null);
+    setFieldErrors({});
+    fieldSnapshotRef.current = JSON.stringify(emptyField);
+    setFieldDialogOpen(true);
+  }
+
+  function closeFieldDialog() {
+    setFieldDialogOpen(false);
+    resetField();
+    setFieldErrors({});
+  }
 
   const saveField = useMutation({
     mutationFn: async () => {
@@ -210,7 +258,7 @@ export function InventoryTypesPage() {
       qc.invalidateQueries({ queryKey: ['fields', selectedId] });
       qc.invalidateQueries({ queryKey: ['schema', selectedId] });
       toast.success(editingFieldId ? 'Field updated' : 'Field added');
-      resetField();
+      closeFieldDialog();
     },
     onError: (e) => toast.error(toErrorMessage(e)),
   });
@@ -291,7 +339,7 @@ export function InventoryTypesPage() {
   function loadField(f: FieldDefinition) {
     setEditingFieldId(f.id);
     const v = f.validation ?? {};
-    setField({
+    const next: FieldFormState = {
       key: f.key,
       displayName: f.displayName,
       description: f.description ?? '',
@@ -312,26 +360,39 @@ export function InventoryTypesPage() {
       currency: typeof f.ui?.currency === 'string' ? (f.ui.currency as string) : '',
       targetTypeId: typeof f.ui?.targetTypeId === 'string' ? (f.ui.targetTypeId as string) : '',
       options: f.options ?? [],
-    });
-    // The field form sits above the table; bring it into view and focus it so editing
-    // is obviously responsive even when the fields list is long.
-    requestAnimationFrame(() => {
-      fieldFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      document.getElementById('field-name')?.focus();
-    });
+    };
+    setField(next);
+    setFieldErrors({});
+    fieldSnapshotRef.current = JSON.stringify(next);
+    setFieldDialogOpen(true);
   }
 
   function onSaveType(e: FormEvent) {
     e.preventDefault();
+    const errs: Record<string, string> = {};
+    if (!editingTypeId && !newType.code.trim()) errs.code = 'Code is required.';
+    if (!newType.name.trim()) errs.name = 'Name is required.';
+    if (Object.keys(errs).length) {
+      setTypeErrors(errs);
+      return;
+    }
+    setTypeErrors({});
     saveType.mutate();
   }
 
   function onSaveField(e: FormEvent) {
     e.preventDefault();
+    const errs: Record<string, string> = {};
+    if (!field.key.trim()) errs.key = 'Key is required.';
+    if (!field.displayName.trim()) errs.displayName = 'Display name is required.';
     if (OPTION_TYPES.has(field.fieldType) && field.options.filter((o) => o.value).length === 0) {
-      toast.error('Add at least one option for this field type');
+      errs.options = 'Add at least one option for this field type.';
+    }
+    if (Object.keys(errs).length) {
+      setFieldErrors(errs);
       return;
     }
+    setFieldErrors({});
     saveField.mutate();
   }
 
@@ -352,47 +413,16 @@ export function InventoryTypesPage() {
           <h2 className="page-title">Inventory Types</h2>
           <p className="muted">Define types and their dynamic field schemas.</p>
         </div>
+        {canWrite ? (
+          <button className="btn" type="button" onClick={openCreateType}>
+            + Add type
+          </button>
+        ) : null}
       </div>
 
       <div className="stack">
         <div className="card stack">
           <h3 className="page-title">Types</h3>
-          {canWrite ? (
-          <form className="stack" onSubmit={onSaveType}>
-            <label className="label" htmlFor="type-code">
-              Code
-              <input
-                id="type-code"
-                className="input"
-                value={newType.code}
-                onChange={(e) => setNewType({ ...newType, code: e.target.value })}
-                placeholder="raw_material"
-                required
-                disabled={Boolean(editingTypeId)}
-              />
-            </label>
-            <label className="label" htmlFor="type-name">
-              Name
-              <input
-                id="type-name"
-                className="input"
-                value={newType.name}
-                onChange={(e) => setNewType({ ...newType, name: e.target.value })}
-                required
-              />
-            </label>
-            <div className="row actions">
-              <button className="btn" type="submit" disabled={saveType.isPending}>
-                {editingTypeId ? 'Save type' : 'Add type'}
-              </button>
-              {editingTypeId ? (
-                <button type="button" className="btn secondary" onClick={resetType}>
-                  Cancel
-                </button>
-              ) : null}
-            </div>
-          </form>
-          ) : null}
           <div className="table-wrap">
             <table className="table compact cards" aria-label="Inventory types">
               <thead>
@@ -432,23 +462,19 @@ export function InventoryTypesPage() {
                         <button
                           type="button"
                           className="btn secondary"
-                          onClick={() => {
-                            setEditingTypeId(t.id);
-                            setNewType({
-                              code: t.code,
-                              name: t.name,
-                              description: t.description ?? '',
-                            });
-                          }}
+                          onClick={() => openEditType(t)}
                         >
                           Edit
                         </button>
                         <button
                           type="button"
-                          className="btn secondary"
+                          className="btn secondary danger"
+                          disabled={deleteType.isPending && deleteType.variables === t.id}
                           onClick={() => void confirmDeleteType(t)}
                         >
-                          Delete
+                          {deleteType.isPending && deleteType.variables === t.id
+                            ? 'Deleting…'
+                            : 'Delete'}
                         </button>
                       </div>
                       ) : null}
@@ -458,7 +484,7 @@ export function InventoryTypesPage() {
                 {typesQuery.data && typesQuery.data.length === 0 ? (
                   <tr>
                     <td colSpan={3} className="muted">
-                      No types yet — add your first above.
+                      No types yet — add your first with “+ Add type”.
                     </td>
                   </tr>
                 ) : null}
@@ -471,9 +497,29 @@ export function InventoryTypesPage() {
 
       {selectedId ? (
         <div className="card stack">
-          <h3 className="page-title">Fields — {selectedTypeName}</h3>
-          {canWrite ? (
-              <form ref={fieldFormRef} className="stack" onSubmit={onSaveField}>
+          <div className="row spread">
+            <h3 className="page-title">Fields — {selectedTypeName}</h3>
+            {canWrite ? (
+              <button className="btn" type="button" onClick={openCreateField}>
+                + Add field
+              </button>
+            ) : null}
+          </div>
+          <FormModal
+            open={fieldDialogOpen}
+            title="Add field"
+            editingLabel={editingFieldId ? field.displayName || field.key || 'field' : null}
+            subtitle={
+              editingFieldId
+                ? 'Updating an existing field — its key and type are fixed.'
+                : 'Add a custom field to this type’s items.'
+            }
+            submitLabel={editingFieldId ? 'Save changes' : 'Add field'}
+            submitting={saveField.isPending}
+            dirty={fieldDialogOpen && JSON.stringify(field) !== fieldSnapshotRef.current}
+            onSubmit={onSaveField}
+            onClose={closeFieldDialog}
+          >
                 <div className="grid cols-2">
                   <label className="label" htmlFor="field-key">
                     Key
@@ -481,11 +527,15 @@ export function InventoryTypesPage() {
                       id="field-key"
                       className="input"
                       value={field.key}
-                      onChange={(e) => setField({ ...field, key: e.target.value })}
+                      onChange={(e) => {
+                        setField({ ...field, key: e.target.value });
+                        if (fieldErrors.key) setFieldErrors((p) => ({ ...p, key: '' }));
+                      }}
                       placeholder="thickness"
-                      required
+                      aria-invalid={Boolean(fieldErrors.key)}
                       disabled={Boolean(editingFieldId)}
                     />
+                    {fieldErrors.key ? <small className="field-error">{fieldErrors.key}</small> : null}
                   </label>
                   <label className="label" htmlFor="field-name">
                     Display name
@@ -493,9 +543,15 @@ export function InventoryTypesPage() {
                       id="field-name"
                       className="input"
                       value={field.displayName}
-                      onChange={(e) => setField({ ...field, displayName: e.target.value })}
-                      required
+                      onChange={(e) => {
+                        setField({ ...field, displayName: e.target.value });
+                        if (fieldErrors.displayName) setFieldErrors((p) => ({ ...p, displayName: '' }));
+                      }}
+                      aria-invalid={Boolean(fieldErrors.displayName)}
                     />
+                    {fieldErrors.displayName ? (
+                      <small className="field-error">{fieldErrors.displayName}</small>
+                    ) : null}
                   </label>
                   <label className="label" htmlFor="field-type">
                     Field type
@@ -764,18 +820,7 @@ export function InventoryTypesPage() {
                   </div>
                 </details>
 
-                <div className="row actions">
-                  <button className="btn" type="submit" disabled={saveField.isPending}>
-                    {editingFieldId ? 'Save field' : 'Add field'}
-                  </button>
-                  {editingFieldId ? (
-                    <button type="button" className="btn secondary" onClick={resetField}>
-                      Cancel
-                    </button>
-                  ) : null}
-                </div>
-              </form>
-              ) : null}
+          </FormModal>
           <div className="table-wrap">
             <table className="table cards" aria-label="Fields">
                   <thead>
@@ -889,10 +934,13 @@ export function InventoryTypesPage() {
                             </button>
                             <button
                               type="button"
-                              className="btn secondary"
+                              className="btn secondary danger"
+                              disabled={deleteField.isPending && deleteField.variables === f.id}
                               onClick={() => void confirmDeleteField(f)}
                             >
-                              Delete
+                              {deleteField.isPending && deleteField.variables === f.id
+                                ? 'Deleting…'
+                                : 'Delete'}
                             </button>
                           </div>
                           ) : null}
@@ -902,7 +950,7 @@ export function InventoryTypesPage() {
                     {fieldsQuery.data && fieldsQuery.data.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="muted">
-                          No fields yet — add one above.
+                          No fields yet — add one with “+ Add field”.
                         </td>
                       </tr>
                     ) : null}
@@ -911,6 +959,53 @@ export function InventoryTypesPage() {
           </div>
         </div>
       ) : null}
+
+      <FormModal
+        open={typeDialogOpen}
+        title="Add type"
+        editingLabel={editingTypeId ? newType.name || newType.code || 'type' : null}
+        subtitle={
+          editingTypeId
+            ? 'Updating an existing inventory type — its code is fixed.'
+            : 'Create a new inventory type, then add its fields.'
+        }
+        submitLabel={editingTypeId ? 'Save changes' : 'Add type'}
+        submitting={saveType.isPending}
+        dirty={typeDirty}
+        onSubmit={onSaveType}
+        onClose={closeTypeDialog}
+      >
+        <label className="label" htmlFor="type-code">
+          Code
+          <input
+            id="type-code"
+            className="input"
+            value={newType.code}
+            onChange={(e) => {
+              changeType({ code: e.target.value });
+              if (typeErrors.code) setTypeErrors((p) => ({ ...p, code: '' }));
+            }}
+            placeholder="raw_material"
+            aria-invalid={Boolean(typeErrors.code)}
+            disabled={Boolean(editingTypeId)}
+          />
+          {typeErrors.code ? <small className="field-error">{typeErrors.code}</small> : null}
+        </label>
+        <label className="label" htmlFor="type-name">
+          Name
+          <input
+            id="type-name"
+            className="input"
+            value={newType.name}
+            onChange={(e) => {
+              changeType({ name: e.target.value });
+              if (typeErrors.name) setTypeErrors((p) => ({ ...p, name: '' }));
+            }}
+            aria-invalid={Boolean(typeErrors.name)}
+          />
+          {typeErrors.name ? <small className="field-error">{typeErrors.name}</small> : null}
+        </label>
+      </FormModal>
     </div>
   );
 }

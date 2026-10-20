@@ -393,6 +393,7 @@ export function ItemsPage() {
             )
           }
           onHistory={(id, label) => setHistoryItem({ id, label })}
+          deletingId={remove.isPending ? (remove.variables as string) : null}
           onEdit={canWrite ? (id) => void openEdit(id) : undefined}
           onDelete={!canWrite ? undefined : async (id, label) => {
             const ok = await confirm({

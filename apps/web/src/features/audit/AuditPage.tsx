@@ -1,7 +1,21 @@
+import { FormEvent, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, toErrorMessage } from '../../shared/api';
+import { api, toErrorMessage, type ApiEnvelope } from '../../shared/api';
 import { SkeletonRows } from '../../shared/Skeleton';
 import { SortableTh, sortRows, useClientSort } from '../../shared/SortHeader';
+
+const PAGE_SIZE = 25;
+
+const ENTITY_OPTIONS: [string, string][] = [
+  ['', 'All types'],
+  ['inventory_items', 'Items'],
+  ['inventory_types', 'Inventory types'],
+  ['field_definitions', 'Fields'],
+  ['stock_transactions', 'Stock movements'],
+  ['suppliers', 'Suppliers'],
+  ['buyers', 'Buyers'],
+  ['settings', 'Settings'],
+];
 
 type AuditKey = 'createdAt' | 'actor' | 'action' | 'entityType';
 
@@ -65,14 +79,37 @@ function describe(row: AuditRow): string {
 
 export function AuditPage() {
   const { sort, toggle } = useClientSort<AuditKey>({ key: 'createdAt', dir: 'desc' });
+  const [page, setPage] = useState(1);
+  const [action, setAction] = useState<'' | 'CREATE' | 'UPDATE' | 'DELETE'>('');
+  const [entityType, setEntityType] = useState('');
+  const [q, setQ] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
+
+  const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
+  if (action) params.set('action', action);
+  if (entityType) params.set('entityType', entityType);
+  if (appliedQ) params.set('q', appliedQ);
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ['audit'],
-    queryFn: async () => (await api<AuditRow[]>('/audit-logs?pageSize=50')).data,
+    queryKey: ['audit', page, action, entityType, appliedQ],
+    queryFn: async () =>
+      api<AuditRow[]>(`/audit-logs?${params.toString()}`) as Promise<ApiEnvelope<AuditRow[]>>,
   });
+  const rowsData = data?.data ?? [];
+  const meta = data?.meta ?? null;
+
+  function setFilter(fn: () => void) {
+    fn();
+    setPage(1);
+  }
+  function onSearch(e: FormEvent) {
+    e.preventDefault();
+    setFilter(() => setAppliedQ(q));
+  }
 
   if (error) return <p className="error">{toErrorMessage(error)}</p>;
 
-  const rows = sortRows(data ?? [], sort, (r, k) =>
+  const rows = sortRows(rowsData, sort, (r, k) =>
     k === 'actor' ? r.actor?.fullName ?? '' : k === 'createdAt' ? r.createdAt : (r[k] as string),
   );
 
@@ -84,7 +121,45 @@ export function AuditPage() {
           <p className="muted">A plain-language history of who changed what, and when.</p>
         </div>
       </div>
-      <div className="card">
+      <div className="card stack">
+        <div className="log-toolbar">
+          <form className="log-search" onSubmit={onSearch} role="search">
+            <input
+              className="input"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search summary, type, or who…"
+              aria-label="Search audit log"
+            />
+          </form>
+          <div className="seg" role="group" aria-label="Filter by action">
+            {([['', 'All'], ['CREATE', 'Created'], ['UPDATE', 'Updated'], ['DELETE', 'Deleted']] as const).map(
+              ([val, label]) => (
+                <button
+                  key={val || 'all'}
+                  type="button"
+                  className={`seg-btn${action === val ? ' seg-on' : ''}`}
+                  aria-pressed={action === val}
+                  onClick={() => setFilter(() => setAction(val))}
+                >
+                  {label}
+                </button>
+              ),
+            )}
+          </div>
+          <select
+            className="select audit-entity-filter"
+            value={entityType}
+            onChange={(e) => setFilter(() => setEntityType(e.target.value))}
+            aria-label="Filter by type"
+          >
+            {ENTITY_OPTIONS.map(([val, label]) => (
+              <option key={val || 'all'} value={val}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="table-wrap">
           <table className="table cards" aria-label="Audit log">
             <thead>
@@ -135,16 +210,41 @@ export function AuditPage() {
                   );
                 })
               )}
-              {!isLoading && (data ?? []).length === 0 ? (
+              {!isLoading && rowsData.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="muted">
-                    No audit entries yet.
+                    No audit entries match.
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        {meta && meta.total > PAGE_SIZE ? (
+          <div className="row spread pagination">
+            <span className="muted">
+              Page {meta.page} of {meta.totalPages} · {meta.total} entries
+            </span>
+            <div className="row">
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={meta.totalPages != null && page >= meta.totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

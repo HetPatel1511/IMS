@@ -1,12 +1,13 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasMinRole, type UserRole } from '@ims/shared';
-import { api, toErrorMessage } from '../../shared/api';
+import { api, toErrorMessage, type ApiEnvelope } from '../../shared/api';
 import { useToast } from '../../shared/toast';
 import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
 import { SkeletonRows } from '../../shared/Skeleton';
 import { SortableTh, sortRows, useClientSort } from '../../shared/SortHeader';
+import { FormModal } from '../../shared/FormModal';
 
 type PartyKey = 'code' | 'name' | 'email' | 'phone';
 
@@ -19,6 +20,7 @@ type Party = {
   isActive: boolean;
 };
 
+const PAGE_SIZE = 20;
 const emptyForm = { code: '', name: '', email: '', phone: '' };
 
 function PartyPage({
@@ -34,22 +36,57 @@ function PartyPage({
   const { user } = useAuth();
   const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
   const { sort, toggle } = useClientSort<PartyKey>();
+  const singular = title.replace(/s$/, '');
+
   const [form, setForm] = useState({ ...emptyForm });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [page, setPage] = useState(1);
 
   const list = useQuery({
-    queryKey: [resource],
-    queryFn: async () => (await api<Party[]>(`/${resource}?pageSize=100`)).data,
+    queryKey: [resource, page],
+    queryFn: async () =>
+      api<Party[]>(`/${resource}?page=${page}&pageSize=${PAGE_SIZE}`) as Promise<ApiEnvelope<Party[]>>,
   });
+  const rowsData = list.data?.data ?? [];
+  const meta = list.data?.meta ?? null;
 
-  const reset = () => {
-    setForm({ ...emptyForm });
+  function change(patch: Partial<typeof emptyForm>) {
+    setDirty(true);
+    setForm((f) => ({ ...f, ...patch }));
+  }
+
+  function openCreate() {
     setEditingId(null);
+    setForm({ ...emptyForm });
     setFieldErrors({});
-  };
+    setDirty(false);
+    setDialogOpen(true);
+  }
 
-  const singular = title.replace(/s$/, '');
+  function openEdit(row: Party) {
+    setEditingId(row.id);
+    setForm({
+      code: row.code,
+      name: row.name,
+      email: row.email ?? '',
+      phone: row.phone ?? '',
+    });
+    setFieldErrors({});
+    setDirty(false);
+    setDialogOpen(true);
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
+    setEditingId(null);
+    setForm({ ...emptyForm });
+    setFieldErrors({});
+    setDirty(false);
+  }
+
   const save = useMutation({
     mutationFn: async () => {
       if (editingId) {
@@ -76,7 +113,7 @@ function PartyPage({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [resource] });
       toast.success(editingId ? `${singular} updated` : `${singular} added`);
-      reset();
+      closeDialog();
     },
     onError: (e) => toast.error(toErrorMessage(e)),
   });
@@ -85,16 +122,13 @@ function PartyPage({
     mutationFn: async (id: string) => api(`/${resource}/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [resource] });
-      toast.success('Removed');
-      if (editingId) reset();
+      toast.success(`${singular} removed`);
     },
     onError: (e) => toast.error(toErrorMessage(e)),
   });
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    // Client-side validation surfaces as the app's styled inline errors rather than
-    // the native browser bubble (the form uses noValidate).
     const errs: Record<string, string> = {};
     if (!editingId && !form.code.trim()) errs.code = 'Code is required.';
     if (!form.name.trim()) errs.name = 'Name is required.';
@@ -109,7 +143,7 @@ function PartyPage({
     save.mutate();
   }
 
-  const rows = sortRows(list.data ?? [], sort, (r, k) => r[k as keyof Party]);
+  const rows = sortRows(rowsData, sort, (r, k) => r[k as keyof Party]);
 
   return (
     <div className="stack">
@@ -118,77 +152,13 @@ function PartyPage({
           <h2 className="page-title">{title}</h2>
           <p className="muted">Master data for catalog relationships.</p>
         </div>
+        {canWrite ? (
+          <button className="btn" type="button" onClick={openCreate}>
+            + Add {singular.toLowerCase()}
+          </button>
+        ) : null}
       </div>
-      {canWrite ? (
-      <div className="card stack">
-        <form className="grid cols-2" onSubmit={onSubmit} noValidate>
-          <label className="label" htmlFor="party-code">
-            Code
-            <input
-              id="party-code"
-              className="input"
-              value={form.code}
-              onChange={(e) => {
-                setForm({ ...form, code: e.target.value });
-                if (fieldErrors.code) setFieldErrors((p) => ({ ...p, code: '' }));
-              }}
-              aria-invalid={Boolean(fieldErrors.code)}
-              disabled={Boolean(editingId)}
-            />
-            {fieldErrors.code ? <small className="field-error">{fieldErrors.code}</small> : null}
-          </label>
-          <label className="label" htmlFor="party-name">
-            Name
-            <input
-              id="party-name"
-              className="input"
-              value={form.name}
-              onChange={(e) => {
-                setForm({ ...form, name: e.target.value });
-                if (fieldErrors.name) setFieldErrors((p) => ({ ...p, name: '' }));
-              }}
-              aria-invalid={Boolean(fieldErrors.name)}
-            />
-            {fieldErrors.name ? <small className="field-error">{fieldErrors.name}</small> : null}
-          </label>
-          <label className="label" htmlFor="party-email">
-            Email
-            <input
-              id="party-email"
-              className="input"
-              type="email"
-              value={form.email}
-              onChange={(e) => {
-                setForm({ ...form, email: e.target.value });
-                if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: '' }));
-              }}
-              aria-invalid={Boolean(fieldErrors.email)}
-            />
-            {fieldErrors.email ? <small className="field-error">{fieldErrors.email}</small> : null}
-          </label>
-          <label className="label" htmlFor="party-phone">
-            Phone
-            <input
-              id="party-phone"
-              className="input"
-              type="tel"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            />
-          </label>
-          <div className="row actions">
-            <button className="btn" type="submit" disabled={save.isPending}>
-              {editingId ? 'Save changes' : 'Add'}
-            </button>
-            {editingId ? (
-              <button type="button" className="btn secondary" onClick={reset}>
-                Cancel
-              </button>
-            ) : null}
-          </div>
-        </form>
-      </div>
-      ) : null}
+
       <div className="card">
         <div className="table-wrap">
           <table className="table cards" aria-label={title}>
@@ -212,19 +182,7 @@ function PartyPage({
                   <td data-label="Actions">
                     {canWrite ? (
                     <div className="row">
-                      <button
-                        type="button"
-                        className="btn secondary"
-                        onClick={() => {
-                          setEditingId(row.id);
-                          setForm({
-                            code: row.code,
-                            name: row.name,
-                            email: row.email ?? '',
-                            phone: row.phone ?? '',
-                          });
-                        }}
-                      >
+                      <button type="button" className="btn secondary" onClick={() => openEdit(row)}>
                         Edit
                       </button>
                       <button
@@ -251,14 +209,112 @@ function PartyPage({
               {!list.isLoading && rows.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="muted">
-                    No {title.toLowerCase()} yet — add your first above.
+                    No {title.toLowerCase()} yet — add your first with “+ Add {singular.toLowerCase()}”.
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        {meta && meta.total > PAGE_SIZE ? (
+          <div className="row spread pagination">
+            <span className="muted">
+              Page {meta.page} of {meta.totalPages} · {meta.total} {title.toLowerCase()}
+            </span>
+            <div className="row">
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={meta.totalPages != null && page >= meta.totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
+
+      <FormModal
+        open={dialogOpen}
+        title={`Add ${singular.toLowerCase()}`}
+        editingLabel={editingId ? form.code || singular : null}
+        subtitle={
+          editingId
+            ? `Updating an existing ${singular.toLowerCase()} — its code is fixed.`
+            : `Create a new ${singular.toLowerCase()}.`
+        }
+        submitLabel={editingId ? 'Save changes' : `Add ${singular.toLowerCase()}`}
+        submitting={save.isPending}
+        dirty={dirty}
+        onSubmit={onSubmit}
+        onClose={closeDialog}
+      >
+        <div className="grid cols-2">
+          <label className="label" htmlFor="party-code">
+            Code
+            <input
+              id="party-code"
+              className="input"
+              value={form.code}
+              onChange={(e) => {
+                change({ code: e.target.value });
+                if (fieldErrors.code) setFieldErrors((p) => ({ ...p, code: '' }));
+              }}
+              aria-invalid={Boolean(fieldErrors.code)}
+              disabled={Boolean(editingId)}
+            />
+            {fieldErrors.code ? <small className="field-error">{fieldErrors.code}</small> : null}
+          </label>
+          <label className="label" htmlFor="party-name">
+            Name
+            <input
+              id="party-name"
+              className="input"
+              value={form.name}
+              onChange={(e) => {
+                change({ name: e.target.value });
+                if (fieldErrors.name) setFieldErrors((p) => ({ ...p, name: '' }));
+              }}
+              aria-invalid={Boolean(fieldErrors.name)}
+            />
+            {fieldErrors.name ? <small className="field-error">{fieldErrors.name}</small> : null}
+          </label>
+          <label className="label" htmlFor="party-email">
+            Email
+            <input
+              id="party-email"
+              className="input"
+              type="email"
+              value={form.email}
+              onChange={(e) => {
+                change({ email: e.target.value });
+                if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: '' }));
+              }}
+              aria-invalid={Boolean(fieldErrors.email)}
+            />
+            {fieldErrors.email ? <small className="field-error">{fieldErrors.email}</small> : null}
+          </label>
+          <label className="label" htmlFor="party-phone">
+            Phone
+            <input
+              id="party-phone"
+              className="input"
+              type="tel"
+              value={form.phone}
+              onChange={(e) => change({ phone: e.target.value })}
+            />
+          </label>
+        </div>
+      </FormModal>
     </div>
   );
 }

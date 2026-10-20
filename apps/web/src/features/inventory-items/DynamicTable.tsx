@@ -23,6 +23,7 @@ type Props = {
   onEdit?: (id: string) => void;
   onDelete?: (id: string, label: string) => void;
   onHistory?: (id: string, label: string) => void;
+  deletingId?: string | null;
   loading?: boolean;
   sort?: SortState;
   onSort?: (key: SortKey) => void;
@@ -51,6 +52,7 @@ export function DynamicTable({
   onEdit,
   onDelete,
   onHistory,
+  deletingId,
   loading,
   sort,
   onSort,
@@ -138,9 +140,10 @@ export function DynamicTable({
                       <button
                         type="button"
                         className="btn secondary danger"
+                        disabled={deletingId === item.id}
                         onClick={() => onDelete(item.id, item.name)}
                       >
-                        Delete
+                        {deletingId === item.id ? 'Deleting…' : 'Delete'}
                       </button>
                     ) : null}
                   </div>

@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { AuditAction, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { paginateMeta, PaginationQueryDto } from '../../common/dto/pagination.dto';
-import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class AuditQueryDto extends PaginationQueryDto {
   @IsOptional()
@@ -16,6 +16,10 @@ export class AuditQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID()
   actorId?: string;
+
+  @IsOptional()
+  @IsEnum(AuditAction)
+  action?: AuditAction;
 }
 
 @Injectable()
@@ -53,7 +57,16 @@ export class AuditService {
       entityType: query.entityType,
       entityId: query.entityId,
       actorId: query.actorId,
+      action: query.action,
     };
+
+    if (query.q) {
+      where.OR = [
+        { summary: { contains: query.q, mode: 'insensitive' } },
+        { entityType: { contains: query.q, mode: 'insensitive' } },
+        { actor: { fullName: { contains: query.q, mode: 'insensitive' } } },
+      ];
+    }
 
     const [total, data] = await this.prisma.$transaction([
       this.prisma.auditLog.count({ where }),

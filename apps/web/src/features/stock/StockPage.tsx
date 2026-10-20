@@ -207,6 +207,22 @@ export function StockPage() {
     setSearchParams(paramsFromFilters(filters), { replace: true });
   }
 
+  // Apply a partial change immediately (used by the Type pills and the chip × buttons).
+  function applyPatch(patch: Partial<Filters>) {
+    const next = { ...filters, ...patch };
+    setFilters(next);
+    setApplied(next);
+    setTxPage(1);
+    setSearchParams(paramsFromFilters(next), { replace: true });
+  }
+
+  function clearAllFilters() {
+    setFilters(emptyFilters);
+    setApplied(emptyFilters);
+    setTxPage(1);
+    setSearchParams(new URLSearchParams(), { replace: true });
+  }
+
   const filteredItemsForForm = useMemo(() => {
     return itemsQuery.data ?? [];
   }, [itemsQuery.data]);
@@ -216,6 +232,36 @@ export function StockPage() {
     if (!filters.inventoryTypeId) return items;
     return items.filter((i) => i.inventoryTypeId === filters.inventoryTypeId);
   }, [itemsQuery.data, filters.inventoryTypeId]);
+
+  // Human-readable chips for the currently-applied filters (each removable).
+  const TYPE_NAMES: Record<string, string> = {
+    PURCHASE: 'Purchase',
+    SALE: 'Sale',
+    ADJUSTMENT: 'Adjustment',
+  };
+  const nameOf = {
+    inventoryTypeId: (id: string) => (typesQuery.data ?? []).find((t) => t.id === id)?.name ?? id,
+    inventoryItemId: (id: string) => (itemsQuery.data ?? []).find((i) => i.id === id)?.sku ?? id,
+    supplierId: (id: string) => (suppliersQuery.data ?? []).find((s) => s.id === id)?.name ?? id,
+    buyerId: (id: string) => (buyersQuery.data ?? []).find((b) => b.id === id)?.name ?? id,
+  };
+  const chipDefs: { key: keyof Filters; label: string }[] = [];
+  if (applied.type) chipDefs.push({ key: 'type', label: `Type: ${TYPE_NAMES[applied.type]}` });
+  if (applied.inventoryTypeId)
+    chipDefs.push({ key: 'inventoryTypeId', label: `Item type: ${nameOf.inventoryTypeId(applied.inventoryTypeId)}` });
+  if (applied.inventoryItemId)
+    chipDefs.push({ key: 'inventoryItemId', label: `Item: ${nameOf.inventoryItemId(applied.inventoryItemId)}` });
+  if (applied.supplierId)
+    chipDefs.push({ key: 'supplierId', label: `Supplier: ${nameOf.supplierId(applied.supplierId)}` });
+  if (applied.buyerId)
+    chipDefs.push({ key: 'buyerId', label: `Buyer: ${nameOf.buyerId(applied.buyerId)}` });
+  if (applied.quantity) chipDefs.push({ key: 'quantity', label: `Qty = ${applied.quantity}` });
+  if (applied.quantityMin) chipDefs.push({ key: 'quantityMin', label: `Qty ≥ ${applied.quantityMin}` });
+  if (applied.quantityMax) chipDefs.push({ key: 'quantityMax', label: `Qty ≤ ${applied.quantityMax}` });
+  if (applied.q) chipDefs.push({ key: 'q', label: `“${applied.q}”` });
+  const advancedActive = (
+    ['inventoryTypeId', 'inventoryItemId', 'supplierId', 'buyerId', 'quantity', 'quantityMin', 'quantityMax'] as (keyof Filters)[]
+  ).filter((k) => applied[k]).length;
 
   return (
     <div className="stack">
@@ -363,35 +409,62 @@ export function StockPage() {
 
       <div className="card stack">
         <h3 className="page-title">Transaction logs</h3>
-        <button
-          type="button"
-          className="btn secondary collapse-toggle"
-          aria-expanded={filtersOpen}
-          onClick={() => setFiltersOpen((o) => !o)}
-        >
-          <span>Filters</span>
-          <span className="chev" aria-hidden>▾</span>
-        </button>
-        <form
-          className={`grid cols-2 filters collapsible${filtersOpen ? '' : ' collapsed'}`}
-          onSubmit={applyFilters}
-        >
-          <label className="label">
-            Type
-            <select
-              className="select"
-              value={filters.type}
-              onChange={(e) =>
-                setFilters({ ...filters, type: e.target.value as Filters['type'] })
-              }
-            >
-              <option value="">All</option>
-              <option value="PURCHASE">Purchase</option>
-              <option value="SALE">Sale</option>
-              <option value="ADJUSTMENT">Adjustment</option>
-            </select>
-          </label>
+        <div className="log-toolbar">
+          <form className="log-search" onSubmit={applyFilters} role="search">
+            <input
+              className="input"
+              value={filters.q}
+              onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+              placeholder="Search SKU, item, party, notes…"
+              aria-label="Search transactions"
+            />
+          </form>
+          <div className="seg" role="group" aria-label="Filter by type">
+            {([['', 'All'], ['PURCHASE', 'Purchases'], ['SALE', 'Sales'], ['ADJUSTMENT', 'Adjustments']] as const).map(
+              ([val, label]) => (
+                <button
+                  key={val || 'all'}
+                  type="button"
+                  className={`seg-btn${applied.type === val ? ' seg-on' : ''}`}
+                  aria-pressed={applied.type === val}
+                  onClick={() => applyPatch({ type: val as Filters['type'] })}
+                >
+                  {label}
+                </button>
+              ),
+            )}
+          </div>
+          <button
+            type="button"
+            className="btn secondary"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((o) => !o)}
+          >
+            Filters{advancedActive ? ` (${advancedActive})` : ''}
+          </button>
+        </div>
 
+        {chipDefs.length ? (
+          <div className="filter-chips">
+            {chipDefs.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                className="chip-filter"
+                onClick={() => applyPatch({ [c.key]: '' } as Partial<Filters>)}
+                aria-label={`Remove filter ${c.label}`}
+              >
+                {c.label} <span aria-hidden>×</span>
+              </button>
+            ))}
+            <button type="button" className="chip-clear" onClick={clearAllFilters}>
+              Clear all
+            </button>
+          </div>
+        ) : null}
+
+        {filtersOpen ? (
+        <form className="grid cols-2 filters" onSubmit={applyFilters}>
           <label className="label">
             Item type
             <select
@@ -498,16 +571,6 @@ export function StockPage() {
             />
           </label>
 
-          <label className="label label-span">
-            Search
-            <input
-              className="input"
-              value={filters.q}
-              onChange={(e) => setFilters({ ...filters, q: e.target.value })}
-              placeholder="SKU, item, supplier, buyer, notes…"
-            />
-          </label>
-
           <div className="row actions label-span">
             <button className="btn" type="submit">
               Apply filters
@@ -525,6 +588,7 @@ export function StockPage() {
             </button>
           </div>
         </form>
+        ) : null}
 
         {txQuery.isLoading ? <p className="muted">Loading transactions…</p> : null}
         {txQuery.isError ? (
