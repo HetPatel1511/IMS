@@ -108,8 +108,17 @@ function buildFieldPayload(f: FieldFormState) {
     defaultValue,
     validation: Object.keys(validation).length ? validation : undefined,
     ui: Object.keys(ui).length ? ui : undefined,
+    // Send only the whitelisted option fields. When editing, f.options are full server
+    // rows (id, fieldDefinitionId, createdAt, …); passing those back fails the API's
+    // forbidNonWhitelisted validation ("options.0.property id should not exist").
     options: OPTION_TYPES.has(f.fieldType)
-      ? f.options.filter((o) => o.value !== '')
+      ? f.options
+          .filter((o) => o.value !== '')
+          .map((o) => ({
+            value: o.value,
+            label: o.label,
+            ...(typeof o.isActive === 'boolean' ? { isActive: o.isActive } : {}),
+          }))
       : undefined,
   };
 }
