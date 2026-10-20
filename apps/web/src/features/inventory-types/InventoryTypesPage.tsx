@@ -296,13 +296,17 @@ export function InventoryTypesPage() {
     reorderFields.mutate(ids);
   }
 
-  // Drag-and-drop field reordering
+  // Drag-and-drop field reordering. The drop indicator sits above the target row, so the
+  // dragged field should land immediately before `toIndex`. When moving down the list
+  // (fromIndex < toIndex), removing the dragged item first shifts every later row left by
+  // one, so the insertion index must be decremented to avoid landing one slot too far.
   function dropField(fromIndex: number, toIndex: number) {
     const list = fieldsQuery.data ?? [];
     if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
     const ids = list.map((f) => f.id);
     const [moved] = ids.splice(fromIndex, 1);
-    ids.splice(toIndex, 0, moved);
+    const insertAt = fromIndex < toIndex ? toIndex - 1 : toIndex;
+    ids.splice(insertAt, 0, moved);
     reorderFields.mutate(ids);
   }
 
