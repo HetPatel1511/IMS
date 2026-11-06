@@ -15,6 +15,7 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { FilesModule } from './modules/files/files.module';
 import { StockTransactionsModule } from './modules/stock-transactions/stock-transactions.module';
+import { StockModule } from './modules/stock/stock.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -35,6 +36,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     AuditModule,
     FilesModule,
     StockTransactionsModule,
+    StockModule,
   ],
 })
 export class AppModule implements NestModule {

@@ -1,9 +1,11 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasMinRole, type UserRole } from '@ims/shared';
 import { api, toErrorMessage } from '../../shared/api';
 import { useToast } from '../../shared/toast';
 import { useAuth } from '../../shared/auth';
+import { DataView, type Column } from '../../ui/DataView';
+import { EmptyState } from '../../ui/EmptyState';
 
 type Setting = {
   id: string;
@@ -12,6 +14,17 @@ type Setting = {
   description?: string | null;
 };
 
+// Constrained choices for the Default unit picker (C6). An unexpected stored value is
+// preserved by appending it as an extra option so saving never silently changes it.
+const UNIT_OPTIONS = ['pcs', 'unit', 'kg', 'g', 'l', 'ml', 'm', 'cm', 'box', 'pack', 'roll', 'set'];
+const LOCALE_OPTIONS: [string, string][] = [
+  ['en-IN', 'English (India)'],
+  ['en-US', 'English (United States)'],
+  ['en-GB', 'English (United Kingdom)'],
+  ['de-DE', 'German (Germany)'],
+  ['fr-FR', 'French (France)'],
+];
+
 export function SettingsPage() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -19,6 +32,7 @@ export function SettingsPage() {
   const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
   const [orgName, setOrgName] = useState('');
   const [defaultUnit, setDefaultUnit] = useState('pcs');
+  const [locale, setLocale] = useState('en-IN');
 
   const settings = useQuery({
     queryKey: ['settings'],
@@ -33,8 +47,21 @@ export function SettingsPage() {
     if (org?.value) {
       setOrgName(String(org.value.name ?? ''));
       setDefaultUnit(String(org.value.defaultUnit ?? 'pcs'));
+      setLocale(String(org.value.locale ?? 'en-IN'));
     }
   }, [settings.data]);
+
+  const unitOptions = useMemo(
+    () => (UNIT_OPTIONS.includes(defaultUnit) ? UNIT_OPTIONS : [defaultUnit, ...UNIT_OPTIONS]),
+    [defaultUnit],
+  );
+  const localeOptions = useMemo(
+    () =>
+      LOCALE_OPTIONS.some(([v]) => v === locale)
+        ? LOCALE_OPTIONS
+        : [[locale, locale] as [string, string], ...LOCALE_OPTIONS],
+    [locale],
+  );
 
   const save = useMutation({
     mutationFn: async () =>
@@ -42,7 +69,7 @@ export function SettingsPage() {
         method: 'PATCH',
         body: JSON.stringify({
           key: 'org',
-          value: { name: orgName, defaultUnit, locale: 'en-IN' },
+          value: { name: orgName, defaultUnit, locale },
         }),
       }),
     onSuccess: () => {
@@ -57,6 +84,30 @@ export function SettingsPage() {
     save.mutate();
   }
 
+  const columns: Column<Setting>[] = [
+    { key: 'key', header: 'Key', cardLabel: 'Key', render: (row) => <code>{row.key}</code> },
+    {
+      key: 'value',
+      header: 'Value',
+      cardLabel: 'Value',
+      render: (row) => (
+        <span className="cell-stack">
+          {Object.entries(row.value ?? {}).map(([k, v]) => (
+            <span key={k}>
+              <span className="muted">{k}:</span> {String(v)}
+            </span>
+          ))}
+        </span>
+      ),
+    },
+    {
+      key: 'description',
+      header: 'Description',
+      cardLabel: 'Description',
+      render: (row) => <span className="muted">{row.description ?? '—'}</span>,
+    },
+  ];
+
   return (
     <div className="stack">
       <div className="page-header">
@@ -65,23 +116,39 @@ export function SettingsPage() {
           <p className="muted">Organization preferences.</p>
         </div>
       </div>
-      <form className="card stack" onSubmit={onSubmit}>
+      <form className="card stack form-narrow" onSubmit={onSubmit}>
         <label className="label">
           Organization name
           <input className="input" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
         </label>
         <label className="label">
           Default unit
-          <input
-            className="input"
+          <select
+            className="select"
             value={defaultUnit}
             onChange={(e) => setDefaultUnit(e.target.value)}
-          />
+          >
+            {unitOptions.map((u) => (
+              <option key={u} value={u}>
+                {u}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="label">
+          Locale
+          <select className="select" value={locale} onChange={(e) => setLocale(e.target.value)}>
+            {localeOptions.map(([v, label]) => (
+              <option key={v} value={v}>
+                {label}
+              </option>
+            ))}
+          </select>
         </label>
         {canWrite ? (
           <div className="row actions">
             <button className="btn" type="submit" disabled={save.isPending}>
-              Save
+              {save.isPending ? 'Saving…' : 'Save'}
             </button>
           </div>
         ) : (
@@ -90,39 +157,14 @@ export function SettingsPage() {
       </form>
       <div className="card stack">
         <h3 className="page-title">All settings</h3>
-        <div className="table-wrap">
-          <table className="table compact cards">
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Value</th>
-                <th>Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(settings.data ?? []).map((row) => (
-                <tr key={row.id}>
-                  <td data-label="Key">{row.key}</td>
-                  <td data-label="Value">
-                    {Object.entries(row.value ?? {}).map(([k, v]) => (
-                      <div key={k}>
-                        <span className="muted">{k}:</span> {String(v)}
-                      </div>
-                    ))}
-                  </td>
-                  <td className="muted" data-label="Description">{row.description ?? '—'}</td>
-                </tr>
-              ))}
-              {settings.data && settings.data.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="muted">
-                    No settings yet.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        <DataView
+          caption="All settings"
+          columns={columns}
+          rows={settings.data ?? []}
+          rowKey={(row) => row.id}
+          loading={settings.isLoading}
+          empty={<EmptyState title="No settings yet" message="Organization settings will appear here." />}
+        />
       </div>
     </div>
   );

@@ -1,8 +1,9 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, toErrorMessage, type ApiEnvelope } from '../../shared/api';
-import { SkeletonRows } from '../../shared/Skeleton';
-import { SortableTh, sortRows, useClientSort } from '../../shared/SortHeader';
+import { useClientSort, sortRows } from '../../shared/SortHeader';
+import { DataView, type Column } from '../../ui/DataView';
+import { EmptyState } from '../../ui/EmptyState';
 
 const PAGE_SIZE = 25;
 
@@ -31,7 +32,6 @@ type AuditRow = {
   afterData?: Record<string, unknown> | null;
 };
 
-// Raw action enum → friendly verb.
 const ACTION_LABEL: Record<string, string> = {
   CREATE: 'Created',
   UPDATE: 'Updated',
@@ -40,7 +40,6 @@ const ACTION_LABEL: Record<string, string> = {
   LOGOUT: 'Signed out',
 };
 
-// Raw table name → friendly, singular entity label.
 const ENTITY_LABEL: Record<string, string> = {
   inventory_items: 'item',
   inventory_types: 'inventory type',
@@ -57,7 +56,6 @@ function entityLabel(entityType: string): string {
   return ENTITY_LABEL[entityType] ?? entityType.replace(/_/g, ' ');
 }
 
-// Pick the most human identifier available from the record snapshot.
 function recordName(row: AuditRow): string | null {
   const d = row.afterData ?? row.beforeData ?? null;
   if (!d) return null;
@@ -68,7 +66,6 @@ function recordName(row: AuditRow): string | null {
   return sku ?? name ?? pick('code') ?? pick('key') ?? null;
 }
 
-// A readable, full-sentence description of the change.
 function describe(row: AuditRow): string {
   if (row.summary) return row.summary;
   const verb = ACTION_LABEL[row.action] ?? row.action.toLowerCase();
@@ -78,6 +75,8 @@ function describe(row: AuditRow): string {
 }
 
 export function AuditPage() {
+  // Sorting stays page-local (the audit API orders newest-first); DataView gives it
+  // keyboard-operable headers (A2). Default view is newest-first, as before.
   const { sort, toggle } = useClientSort<AuditKey>({ key: 'createdAt', dir: 'desc' });
   const [page, setPage] = useState(1);
   const [action, setAction] = useState<'' | 'CREATE' | 'UPDATE' | 'DELETE'>('');
@@ -107,30 +106,123 @@ export function AuditPage() {
     setFilter(() => setAppliedQ(q));
   }
 
+  const rows = useMemo(
+    () =>
+      sortRows(rowsData, sort, (r, k) =>
+        k === 'actor' ? r.actor?.fullName ?? '' : k === 'createdAt' ? r.createdAt : (r[k] as string),
+      ),
+    [rowsData, sort],
+  );
+
+  // Quieter repeated actor + day grouping cues (C5): compute per-row flags over the
+  // rendered order so the "Who" column and date don't repeat noisily down the list.
+  const flags = useMemo(() => {
+    const m = new Map<string, { newDay: boolean; repeatedActor: boolean }>();
+    let prevDay = '';
+    let prevActor = '';
+    for (const r of rows) {
+      const day = new Date(r.createdAt).toDateString();
+      const actor = r.actor?.fullName ?? 'System';
+      m.set(r.id, { newDay: day !== prevDay, repeatedActor: actor === prevActor });
+      prevDay = day;
+      prevActor = actor;
+    }
+    return m;
+  }, [rows]);
+
   if (error) return <p className="error">{toErrorMessage(error)}</p>;
 
-  const rows = sortRows(rowsData, sort, (r, k) =>
-    k === 'actor' ? r.actor?.fullName ?? '' : k === 'createdAt' ? r.createdAt : (r[k] as string),
-  );
+  const columns: Column<AuditRow>[] = [
+    {
+      key: 'createdAt',
+      header: 'When',
+      cardLabel: 'When',
+      sortKey: 'createdAt',
+      render: (row) => {
+        const when = new Date(row.createdAt);
+        const f = flags.get(row.id);
+        return (
+          <span className="cell-stack">
+            <span className={f && !f.newDay ? 'muted' : undefined}>{when.toLocaleDateString()}</span>
+            <span className="muted audit-time">{when.toLocaleTimeString()}</span>
+          </span>
+        );
+      },
+    },
+    {
+      key: 'actor',
+      header: 'Who',
+      cardLabel: 'Who',
+      sortKey: 'actor',
+      render: (row) => {
+        const f = flags.get(row.id);
+        const name = row.actor?.fullName ?? 'System';
+        return <span className={f?.repeatedActor ? 'muted' : undefined}>{name}</span>;
+      },
+    },
+    {
+      key: 'action',
+      header: 'Action',
+      cardLabel: 'Action',
+      sortKey: 'action',
+      render: (row) => (
+        <span className={`audit-badge audit-${row.action.toLowerCase()}`}>
+          {ACTION_LABEL[row.action] ?? row.action}
+        </span>
+      ),
+    },
+    {
+      key: 'entityType',
+      header: 'Type',
+      cardLabel: 'Type',
+      sortKey: 'entityType',
+      render: (row) => <span className="type-chip">{entityLabel(row.entityType)}</span>,
+    },
+    {
+      key: 'what',
+      header: 'What changed',
+      cardLabel: 'What changed',
+      render: (row) => (
+        <>
+          <span className="audit-change">{describe(row)}</span>
+          <button
+            type="button"
+            className="audit-ref"
+            title={`Copy record id (${row.entityId})`}
+            aria-label="Copy record id"
+            onClick={() => navigator.clipboard?.writeText(row.entityId)}
+          >
+            ⧉
+          </button>
+        </>
+      ),
+    },
+  ];
 
   return (
     <div className="stack">
       <div className="page-header">
         <div>
-          <h2 className="page-title">Audit Logs</h2>
+          <h2 className="page-title">Audit Log</h2>
           <p className="muted">A plain-language history of who changed what, and when.</p>
         </div>
       </div>
       <div className="card stack">
         <div className="log-toolbar">
           <form className="log-search" onSubmit={onSearch} role="search">
-            <input
-              className="input"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search summary, type, or who…"
-              aria-label="Search audit log"
-            />
+            <div className="search-field">
+              <svg className="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.3-4.3" />
+              </svg>
+              <input
+                className="input"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search summary, type, or who…"
+                aria-label="Search audit log"
+              />
+            </div>
           </form>
           <div className="seg" role="group" aria-label="Filter by action">
             {([['', 'All'], ['CREATE', 'Created'], ['UPDATE', 'Updated'], ['DELETE', 'Deleted']] as const).map(
@@ -160,66 +252,19 @@ export function AuditPage() {
             ))}
           </select>
         </div>
-        <div className="table-wrap">
-          <table className="table cards" aria-label="Audit log">
-            <thead>
-              <tr>
-                <SortableTh label="When" sortKey="createdAt" sort={sort} onSort={toggle} />
-                <SortableTh label="Who" sortKey="actor" sort={sort} onSort={toggle} />
-                <SortableTh label="Action" sortKey="action" sort={sort} onSort={toggle} />
-                <SortableTh label="Type" sortKey="entityType" sort={sort} onSort={toggle} />
-                <th>What changed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {isLoading ? (
-                <SkeletonRows rows={6} cols={5} />
-              ) : (
-                rows.map((row) => {
-                  const when = new Date(row.createdAt);
-                  return (
-                    <tr key={row.id}>
-                      <td data-label="When">
-                        <span className="cell-stack">
-                          <span>{when.toLocaleDateString()}</span>
-                          <span className="muted audit-time">{when.toLocaleTimeString()}</span>
-                        </span>
-                      </td>
-                      <td data-label="Who">{row.actor?.fullName ?? 'System'}</td>
-                      <td data-label="Action">
-                        <span className={`audit-badge audit-${row.action.toLowerCase()}`}>
-                          {ACTION_LABEL[row.action] ?? row.action}
-                        </span>
-                      </td>
-                      <td data-label="Type" className="audit-type">
-                        {entityLabel(row.entityType)}
-                      </td>
-                      <td data-label="What changed">
-                        <span className="audit-change">{describe(row)}</span>
-                        <button
-                          type="button"
-                          className="audit-ref"
-                          title={`Copy record id (${row.entityId})`}
-                          aria-label="Copy record id"
-                          onClick={() => navigator.clipboard?.writeText(row.entityId)}
-                        >
-                          ⧉
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-              {!isLoading && rowsData.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="muted">
-                    No audit entries match.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+
+        <DataView
+          caption="Audit log"
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          loading={isLoading}
+          sort={sort}
+          onSort={(k) => toggle(k as AuditKey)}
+          rowClassName={(r) => (flags.get(r.id)?.newDay ? 'audit-newday' : undefined)}
+          empty={<EmptyState title="No audit entries match" message="Try clearing a filter or search." />}
+        />
+
         {meta && meta.total > PAGE_SIZE ? (
           <div className="row spread pagination">
             <span className="muted">

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FIELD_TYPES, hasMinRole, type FieldType, type UserRole } from '@ims/shared';
@@ -8,6 +8,7 @@ import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
 import { FormModal } from '../../shared/FormModal';
 import { usePageBreadcrumb } from '../../shared/breadcrumb';
+import { EmptyState } from '../../ui/EmptyState';
 import type { FieldDefinition, FieldOption } from '../inventory-items/DynamicForm';
 
 type InventoryType = {
@@ -135,8 +136,12 @@ export function TypeSchemaPage() {
 
   const [field, setField] = useState<FieldFormState>(emptyField);
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [overIdx, setOverIdx] = useState<number | null>(null);
+  // Pointer-based drag reorder (works for mouse AND touch; the native HTML5 drag API
+  // does not fire on touch screens). `from` is the field being dragged; `insert` is the
+  // gap index (0..length) it would drop into.
+  const [drag, setDrag] = useState<{ from: number; insert: number } | null>(null);
+  const dragRef = useRef<{ from: number; insert: number } | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   const [fieldDialogOpen, setFieldDialogOpen] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const fieldSnapshotRef = useRef<string>('');
@@ -155,6 +160,7 @@ export function TypeSchemaPage() {
     queryFn: async () =>
       (await api<FieldDefinition[]>(`/inventory-types/${typeId}/fields`)).data,
   });
+  const fields = fieldsQuery.data ?? [];
 
   const resetField = () => {
     setField(emptyField);
@@ -224,41 +230,81 @@ export function TypeSchemaPage() {
     onError: (e) => toast.error(toErrorMessage(e)),
   });
 
-  // After a keyboard reorder, restore focus to the moved field's handle (B3): the list
-  // refetches after reorder, so without this a keyboard user loses focus between moves.
-  const pendingFocusField = useRef<string | null>(null);
+  // After a reorder, restore focus to the control the user acted on (B3): the list
+  // refetches after reorder, so without this a keyboard/touch user loses their place.
+  const pendingFocus = useRef<{ id: string; ctrl: 'up' | 'down' | 'handle' } | null>(null);
   useEffect(() => {
-    const id = pendingFocusField.current;
-    if (!id) return;
-    const el = document.querySelector<HTMLButtonElement>(`.drag-handle[data-field-id="${id}"]`);
-    if (el) {
-      el.focus();
-      pendingFocusField.current = null;
+    const p = pendingFocus.current;
+    if (!p) return;
+    const pick = document.querySelector<HTMLButtonElement>(
+      `[data-field-id="${p.id}"][data-reorder="${p.ctrl}"]`,
+    );
+    const target =
+      pick && !pick.disabled
+        ? pick
+        : document.querySelector<HTMLButtonElement>(`[data-field-id="${p.id}"][data-reorder="handle"]`);
+    if (target) {
+      target.focus();
+      pendingFocus.current = null;
     }
   }, [fieldsQuery.data]);
 
-  function moveField(index: number, dir: -1 | 1) {
+  function moveField(index: number, dir: -1 | 1, ctrl: 'up' | 'down' | 'handle' = 'handle') {
     const list = fieldsQuery.data ?? [];
     const target = index + dir;
     if (target < 0 || target >= list.length) return;
-    pendingFocusField.current = list[index].id;
+    pendingFocus.current = { id: list[index].id, ctrl };
     const ids = list.map((f) => f.id);
     [ids[index], ids[target]] = [ids[target], ids[index]];
     reorderFields.mutate(ids);
   }
 
-  // Drag-and-drop field reordering. The drop indicator sits above the target row, so the
-  // dragged field should land immediately before `toIndex`. When moving down the list
-  // (fromIndex < toIndex), removing the dragged item first shifts every later row left by
-  // one, so the insertion index must be decremented to avoid landing one slot too far.
-  function dropField(fromIndex: number, toIndex: number) {
+  // Work out which gap (0..length) the pointer is hovering, by comparing its Y against
+  // each field row's vertical midpoint.
+  function insertIndexForY(clientY: number): number {
+    const items = Array.from(listRef.current?.querySelectorAll<HTMLElement>('.field-item') ?? []);
+    for (let i = 0; i < items.length; i++) {
+      const r = items[i].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) return i;
+    }
+    return items.length;
+  }
+
+  function startDrag(e: ReactPointerEvent, index: number) {
+    if (!canWrite || reorderFields.isPending) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    const st = { from: index, insert: index };
+    dragRef.current = st;
+    setDrag(st);
+  }
+
+  function moveDrag(e: ReactPointerEvent) {
+    if (!dragRef.current) return;
+    e.preventDefault();
+    const insert = insertIndexForY(e.clientY);
+    if (insert !== dragRef.current.insert) {
+      const st = { ...dragRef.current, insert };
+      dragRef.current = st;
+      setDrag(st);
+    }
+  }
+
+  function endDrag() {
+    const st = dragRef.current;
+    dragRef.current = null;
+    setDrag(null);
+    if (!st) return;
     const list = fieldsQuery.data ?? [];
-    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
     const ids = list.map((f) => f.id);
-    const [moved] = ids.splice(fromIndex, 1);
-    const insertAt = fromIndex < toIndex ? toIndex - 1 : toIndex;
-    ids.splice(insertAt, 0, moved);
-    reorderFields.mutate(ids);
+    const [moved] = ids.splice(st.from, 1);
+    // Removing the dragged item shifts later rows up one, so adjust a downward drop.
+    const adj = st.insert > st.from ? st.insert - 1 : st.insert;
+    ids.splice(adj, 0, moved);
+    if (ids.some((id, i) => id !== list[i]?.id)) {
+      pendingFocus.current = { id: moved, ctrl: 'handle' };
+      reorderFields.mutate(ids);
+    }
   }
 
   async function confirmDeleteField(f: FieldDefinition) {
@@ -343,13 +389,20 @@ export function TypeSchemaPage() {
     );
   }
 
+  const flagsText = (f: FieldDefinition) =>
+    [
+      f.isRequired && 'required',
+      f.isUnique && 'unique',
+      f.isFilterable && 'filterable',
+      f.options?.length ? `${f.options.length} options` : null,
+    ]
+      .filter(Boolean)
+      .join(', ') || '—';
+
   return (
     <div className="stack">
       <div className="page-header">
         <div>
-          <Link className="back-link" to="/inventory-types">
-            ← Inventory Types
-          </Link>
           <h2 className="page-title">{typeName || 'Schema'}</h2>
           <p className="muted">
             Fields for <code>{currentType?.code ?? typeId}</code> — the attributes captured on
@@ -364,114 +417,103 @@ export function TypeSchemaPage() {
       </div>
 
       <div className="card stack">
-        <div className="table-wrap">
-          <table className="table cards" aria-label="Fields">
-            <thead>
-              <tr>
-                <th>Order</th>
-                <th>Key</th>
-                <th>Label</th>
-                <th>Type</th>
-                <th>Flags</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {(fieldsQuery.data ?? []).map((f, idx) => (
-                <tr
-                  key={f.id}
-                  draggable={canWrite}
-                  onDragStart={() => setDragIdx(idx)}
-                  onDragOver={(e) => {
-                    if (dragIdx === null) return;
-                    e.preventDefault();
-                    setOverIdx(idx);
-                  }}
-                  onDragEnd={() => {
-                    setDragIdx(null);
-                    setOverIdx(null);
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (dragIdx !== null) dropField(dragIdx, idx);
-                    setDragIdx(null);
-                    setOverIdx(null);
-                  }}
-                  className={dragIdx === idx ? 'dragging' : overIdx === idx ? 'drag-over' : undefined}
-                >
-                  <td className="num" data-label="Order">
-                    {canWrite ? (
-                      <div className="row" style={{ gap: '0.4rem', flexWrap: 'nowrap' }}>
-                        <button
-                          type="button"
-                          className="drag-handle"
-                          data-field-id={f.id}
-                          aria-label={`Reorder ${f.displayName}. Use arrow up or down keys to move.`}
-                          aria-keyshortcuts="ArrowUp ArrowDown"
-                          title="Drag, or focus and press ↑/↓ to reorder"
-                          disabled={reorderFields.isPending}
-                          onKeyDown={(e) => {
-                            if (e.key === 'ArrowUp') {
-                              e.preventDefault();
-                              moveField(idx, -1);
-                            } else if (e.key === 'ArrowDown') {
-                              e.preventDefault();
-                              moveField(idx, 1);
-                            }
-                          }}
-                        >
-                          ⠿
-                        </button>
-                        <span>{f.sortOrder}</span>
-                      </div>
-                    ) : (
-                      f.sortOrder
-                    )}
-                  </td>
-                  <td data-label="Key">{f.key}</td>
-                  <td data-label="Label">{f.displayName}</td>
-                  <td data-label="Type">{f.fieldType}</td>
-                  <td className="muted" data-label="Flags">
-                    {[
-                      f.isRequired && 'required',
-                      f.isUnique && 'unique',
-                      f.isFilterable && 'filterable',
-                      f.options?.length ? `${f.options.length} options` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(', ') || '—'}
-                  </td>
-                  <td data-label="Actions">
-                    {canWrite ? (
-                      <div className="row">
-                        <button type="button" className="btn secondary" onClick={() => loadField(f)}>
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn secondary danger"
-                          disabled={deleteField.isPending && deleteField.variables === f.id}
-                          onClick={() => void confirmDeleteField(f)}
-                        >
-                          {deleteField.isPending && deleteField.variables === f.id
-                            ? 'Deleting…'
-                            : 'Delete'}
-                        </button>
-                      </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-              {fieldsQuery.data && fieldsQuery.data.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="muted">
-                    No fields yet — add one with “+ Add field”.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        {canWrite && fields.length > 1 ? (
+          <p className="muted field-list-hint">
+            Drag the grip <span aria-hidden>⠿</span> to reorder (works on touch too), or focus it
+            and press ↑/↓. Order sets how fields appear on the item form.
+          </p>
+        ) : null}
+
+        {fieldsQuery.isLoading ? (
+          <ul className="field-list" aria-hidden>
+            {Array.from({ length: 4 }).map((_, i) => (
+              <li className="field-item field-skel" key={i}>
+                <span className="dv-skel-cell" style={{ width: '100%' }} />
+              </li>
+            ))}
+          </ul>
+        ) : fields.length === 0 ? (
+          <EmptyState
+            title="No fields yet"
+            message={canWrite ? 'Add one with “+ Add field”.' : 'This type has no custom fields yet.'}
+          />
+        ) : (
+          <ul className="field-list" ref={listRef}>
+            {fields.map((f, idx) => (
+              <li
+                key={f.id}
+                data-index={idx}
+                className={[
+                  'field-item',
+                  drag?.from === idx ? 'dragging' : '',
+                  drag && drag.insert === idx ? 'drop-before' : '',
+                  drag && drag.insert === fields.length && idx === fields.length - 1
+                    ? 'drop-after'
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              >
+                <div className="field-reorder">
+                  {canWrite ? (
+                    <button
+                      type="button"
+                      className="drag-handle"
+                      data-field-id={f.id}
+                      data-reorder="handle"
+                      aria-label={`Reorder ${f.displayName}. Drag, or press arrow up or down.`}
+                      aria-keyshortcuts="ArrowUp ArrowDown"
+                      title="Drag to reorder (or press ↑/↓)"
+                      disabled={reorderFields.isPending}
+                      onPointerDown={(e) => startDrag(e, idx)}
+                      onPointerMove={moveDrag}
+                      onPointerUp={endDrag}
+                      onPointerCancel={endDrag}
+                      onKeyDown={(e) => {
+                        if (e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          moveField(idx, -1, 'handle');
+                        } else if (e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          moveField(idx, 1, 'handle');
+                        }
+                      }}
+                    >
+                      ⠿
+                    </button>
+                  ) : (
+                    <span className="field-order-num">{f.sortOrder}</span>
+                  )}
+                </div>
+
+                <div className="field-main">
+                  <div className="field-head">
+                    <span className="field-label">{f.displayName}</span>
+                    <code className="field-key">{f.key}</code>
+                    <span className="type-chip">{f.fieldType}</span>
+                  </div>
+                  <div className="field-flags muted">{flagsText(f)}</div>
+                </div>
+
+                {canWrite ? (
+                  <div className="field-actions">
+                    <button type="button" className="btn secondary" onClick={() => loadField(f)}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn secondary danger"
+                      disabled={deleteField.isPending && deleteField.variables === f.id}
+                      onClick={() => void confirmDeleteField(f)}
+                    >
+                      {deleteField.isPending && deleteField.variables === f.id ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <FormModal
@@ -491,7 +533,7 @@ export function TypeSchemaPage() {
       >
         <div className="grid cols-2">
           <label className="label" htmlFor="field-key">
-            Key
+            <span>Key<span className="req-star" aria-hidden>*</span></span>
             <input
               id="field-key"
               className="input"
@@ -507,7 +549,7 @@ export function TypeSchemaPage() {
             {fieldErrors.key ? <small className="field-error">{fieldErrors.key}</small> : null}
           </label>
           <label className="label" htmlFor="field-name">
-            Display name
+            <span>Display name<span className="req-star" aria-hidden>*</span></span>
             <input
               id="field-name"
               className="input"

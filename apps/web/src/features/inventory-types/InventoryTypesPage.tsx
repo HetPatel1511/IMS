@@ -7,6 +7,8 @@ import { useToast } from '../../shared/toast';
 import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
 import { FormModal } from '../../shared/FormModal';
+import { DataView, type Column } from '../../ui/DataView';
+import { EmptyState } from '../../ui/EmptyState';
 
 type InventoryType = {
   id: string;
@@ -129,6 +131,43 @@ export function InventoryTypesPage() {
     saveType.mutate();
   }
 
+  const columns: Column<InventoryType>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      cardLabel: 'Name',
+      render: (t) => (
+        <button
+          type="button"
+          className="type-name-btn"
+          title={`Manage fields for ${t.name}`}
+          onClick={() => navigate(`/inventory-types/${t.id}`)}
+        >
+          <span>{t.name}</span>
+          {t.isActive === false ? <span className="type-inactive">(inactive)</span> : null}
+        </button>
+      ),
+    },
+    { key: 'code', header: 'Code', cardLabel: 'Code', render: (t) => <code>{t.code}</code> },
+    {
+      key: 'fields',
+      header: 'Fields',
+      cardLabel: 'Fields',
+      render: (t) => (
+        <button
+          type="button"
+          className="manage-fields-link"
+          onClick={() => navigate(`/inventory-types/${t.id}`)}
+        >
+          Manage fields
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      ),
+    },
+  ];
+
   return (
     <div className="stack">
       <div className="page-header">
@@ -144,66 +183,38 @@ export function InventoryTypesPage() {
       </div>
 
       <div className="card stack">
-        <div className="table-wrap">
-          <table className="table compact cards" aria-label="Inventory types">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Code</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {(typesQuery.data ?? []).map((t) => (
-                <tr key={t.id}>
-                  <td data-label="Name">
+        <DataView
+          caption="Inventory types"
+          columns={columns}
+          rows={typesQuery.data ?? []}
+          rowKey={(t) => t.id}
+          loading={typesQuery.isLoading}
+          actions={
+            canWrite
+              ? (t) => (
+                  <>
+                    <button type="button" className="btn secondary" onClick={() => openEditType(t)}>
+                      Edit
+                    </button>
                     <button
                       type="button"
-                      className="btn secondary type-select"
-                      title={`Manage fields for ${t.name}`}
-                      onClick={() => navigate(`/inventory-types/${t.id}`)}
+                      className="btn secondary danger"
+                      disabled={deleteType.isPending && deleteType.variables === t.id}
+                      onClick={() => void confirmDeleteType(t)}
                     >
-                      <span>
-                        {t.name}
-                        {t.isActive === false ? ' (inactive)' : ''}
-                      </span>
-                      <span className="type-select-hint" aria-hidden>
-                        Manage fields ›
-                      </span>
+                      {deleteType.isPending && deleteType.variables === t.id ? 'Deleting…' : 'Delete'}
                     </button>
-                  </td>
-                  <td data-label="Code">{t.code}</td>
-                  <td data-label="Actions">
-                    {canWrite ? (
-                      <div className="row">
-                        <button type="button" className="btn secondary" onClick={() => openEditType(t)}>
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn secondary danger"
-                          disabled={deleteType.isPending && deleteType.variables === t.id}
-                          onClick={() => void confirmDeleteType(t)}
-                        >
-                          {deleteType.isPending && deleteType.variables === t.id
-                            ? 'Deleting…'
-                            : 'Delete'}
-                        </button>
-                      </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-              {typesQuery.data && typesQuery.data.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="muted">
-                    No types yet — add your first with “+ Add type”.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+                  </>
+                )
+              : undefined
+          }
+          empty={
+            <EmptyState
+              title="No inventory types yet"
+              message={canWrite ? 'Add your first with “+ Add type”.' : 'No types have been defined yet.'}
+            />
+          }
+        />
       </div>
 
       <FormModal
@@ -222,7 +233,7 @@ export function InventoryTypesPage() {
         onClose={closeTypeDialog}
       >
         <label className="label" htmlFor="type-code">
-          Code
+          <span>Code{!editingTypeId ? <span className="req-star" aria-hidden>*</span> : null}</span>
           <input
             id="type-code"
             className="input"
@@ -238,7 +249,7 @@ export function InventoryTypesPage() {
           {typeErrors.code ? <small className="field-error">{typeErrors.code}</small> : null}
         </label>
         <label className="label" htmlFor="type-name">
-          Name
+          <span>Name<span className="req-star" aria-hidden>*</span></span>
           <input
             id="type-name"
             className="input"

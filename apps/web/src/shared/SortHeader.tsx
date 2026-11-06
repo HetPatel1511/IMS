@@ -26,27 +26,3 @@ export function sortRows<T, K extends string>(
     return String(av ?? '').localeCompare(String(bv ?? '')) * sign;
   });
 }
-
-export function SortableTh<K extends string>({
-  label,
-  sortKey,
-  sort,
-  onSort,
-}: {
-  label: string;
-  sortKey: K;
-  sort: Sort<K>;
-  onSort: (key: K) => void;
-}) {
-  const active = sort?.key === sortKey;
-  return (
-    <th
-      className="sortable"
-      onClick={() => onSort(sortKey)}
-      aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-    >
-      {label}
-      {active ? <span className="sort-ind"> {sort!.dir === 'asc' ? '▲' : '▼'}</span> : null}
-    </th>
-  );
-}

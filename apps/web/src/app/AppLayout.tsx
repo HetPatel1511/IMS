@@ -27,6 +27,8 @@ const ICONS: Record<string, string> = {
   audit: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7h6m-6 4h4',
 };
 
+// Nav labels are kept identical to each page's own heading (B1): the breadcrumb and
+// mobile header derive their title from these labels, so they must match the page.
 const NAV = [
   { to: '/', label: 'Dashboard', end: true, icon: 'dashboard' },
   { to: '/inventory-types', label: 'Inventory Types', icon: 'types' },
@@ -35,7 +37,7 @@ const NAV = [
   { to: '/suppliers', label: 'Suppliers', icon: 'suppliers' },
   { to: '/buyers', label: 'Buyers', icon: 'buyers' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
-  { to: '/audit', label: 'Audit', icon: 'audit' },
+  { to: '/audit', label: 'Audit Log', icon: 'audit' },
 ];
 
 function NavIcon({ name }: { name: string }) {
@@ -44,6 +46,13 @@ function NavIcon({ name }: { name: string }) {
       <path d={ICONS[name]} />
     </svg>
   );
+}
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 export function AppLayout() {
@@ -58,6 +67,19 @@ export function AppLayout() {
     }
   });
   const [theme, setTheme] = useState<Theme>(() => getTheme());
+  // Track mobile mode so the off-canvas drawer can be removed from the tab order
+  // (and the a11y tree) when closed (A3). Mirrors the CSS drawer breakpoint.
+  const [isMobile, setIsMobile] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 980px)').matches,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 980px)');
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   useEffect(() => {
     saveTheme(theme);
@@ -126,6 +148,8 @@ export function AppLayout() {
   const cycleTheme = () => setTheme((t) => nextTheme(t));
   const themeIcon = themeIconFor(theme);
   const themeLabel = themeLabelFor(theme);
+  // When the drawer is closed on mobile, take it out of the tab order + a11y tree (A3).
+  const drawerHidden = isMobile && !navOpen;
 
   return (
     <div className={`shell${navOpen ? ' nav-open' : ''}${railed ? ' rail' : ''}`}>
@@ -169,9 +193,17 @@ export function AppLayout() {
         onClick={() => setNavOpen(false)}
       />
 
-      <aside id="app-sidebar" className="sidebar">
+      <aside
+        id="app-sidebar"
+        className="sidebar"
+        inert={drawerHidden || undefined}
+        aria-hidden={drawerHidden || undefined}
+      >
         <div className="brand-row">
-          <h1 className="brand">IMS</h1>
+          <h1 className="brand">
+            <span className="brand-mark" aria-hidden>IM</span>
+            <span className="brand-text">IMS</span>
+          </h1>
           <div className="brand-row-actions">
             <button
               type="button"
@@ -203,10 +235,12 @@ export function AppLayout() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="muted user-meta">
-            {user.fullName}
-            <br />
-            {user.role}
+          <div className="user-card">
+            <span className="user-avatar" aria-hidden>{initials(user.fullName)}</span>
+            <div className="user-meta">
+              <div className="user-name" title={user.fullName}>{user.fullName}</div>
+              <div className="user-role">{user.role}</div>
+            </div>
           </div>
           <div className="row theme-row">
             <button

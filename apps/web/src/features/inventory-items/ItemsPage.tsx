@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasMinRole, type UserRole } from '@ims/shared';
 import { api, ApiRequestError, toErrorMessage, type ApiEnvelope } from '../../shared/api';
@@ -6,6 +6,9 @@ import { useToast } from '../../shared/toast';
 import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
 import { useFocusTrap } from '../../shared/useFocusTrap';
+import { FormModal } from '../../shared/FormModal';
+import { DataView, type Column as DvColumn } from '../../ui/DataView';
+import { EmptyState } from '../../ui/EmptyState';
 import { DynamicForm, type FieldDefinition } from './DynamicForm';
 import { DynamicTable, type SortKey, type SortState } from './DynamicTable';
 
@@ -48,6 +51,8 @@ const emptyForm = {
   attributes: {} as Record<string, unknown>,
 };
 
+const DEFAULT_ATTR_COLS = 4;
+
 export function ItemsPage() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -57,8 +62,12 @@ export function ItemsPage() {
   const [typeId, setTypeId] = useState('');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [lowOnly, setLowOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>(null);
+  // Which attribute columns are shown (B3). null = the default first-N; otherwise the
+  // explicit set chosen in the column picker. Reset when the filter type changes.
+  const [selectedCols, setSelectedCols] = useState<string[] | null>(null);
 
   // Debounce the search box so we don't fire a request per keystroke.
   useEffect(() => {
@@ -74,8 +83,7 @@ export function ItemsPage() {
   const [formTypeId, setFormTypeId] = useState('');
   const [form, setForm] = useState({ ...emptyForm });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const dirtyRef = useRef(false);
-  const trapRef = useFocusTrap<HTMLDivElement>(dialogOpen);
+  const [dirty, setDirty] = useState(false);
 
   // Per-item movement history drawer (v3 A4): reuses the stock-transactions list,
   // filtered to one item, so edits can be explained by the quantity changes behind them.
@@ -117,7 +125,7 @@ export function ItemsPage() {
 
   // Mark the form dirty + update it (used by user-facing inputs).
   function change(patch: Partial<typeof emptyForm>) {
-    dirtyRef.current = true;
+    setDirty(true);
     setForm((f) => ({ ...f, ...patch }));
   }
 
@@ -127,11 +135,13 @@ export function ItemsPage() {
   });
 
   const itemsQuery = useQuery({
-    queryKey: ['items', typeId, debouncedSearch, page],
+    queryKey: ['items', typeId, debouncedSearch, lowOnly, page, sort],
     queryFn: async () => {
       const qs = new URLSearchParams({ pageSize: String(PAGE_SIZE), page: String(page) });
       if (typeId) qs.set('inventoryTypeId', typeId);
       if (debouncedSearch.trim()) qs.set('q', debouncedSearch.trim());
+      if (lowOnly) qs.set('belowReorder', '1');
+      if (sort) qs.set('sort', `${sort.key}:${sort.dir}`);
       return api<Item[]>(`/inventory-items?${qs}`) as Promise<ApiEnvelope<Item[]>>;
     },
   });
@@ -171,17 +181,6 @@ export function ItemsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formSchemaQuery.data, dialogOpen, editingId]);
 
-  // Close the modal on Escape.
-  useEffect(() => {
-    if (!dialogOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeDialog();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dialogOpen]);
-
   const save = useMutation({
     mutationFn: async () => {
       if (editingId) {
@@ -199,7 +198,7 @@ export function ItemsPage() {
       qc.invalidateQueries({ queryKey: ['items'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       toast.success(editingId ? 'Item updated' : 'Item created');
-      forceClose();
+      resetAndClose();
     },
     onError: (e) => {
       // Map structured validation details onto the offending fields.
@@ -232,7 +231,7 @@ export function ItemsPage() {
     setForm({ ...emptyForm, attributes: {} });
     setFormTypeId(typeId || typesQuery.data?.[0]?.id || '');
     setDialogOpen(true);
-    dirtyRef.current = false;
+    setDirty(false);
   }
 
   async function openEdit(id: string) {
@@ -248,29 +247,23 @@ export function ItemsPage() {
       attributes: (res.data.attributes as Record<string, unknown>) ?? {},
     });
     setDialogOpen(true);
-    dirtyRef.current = false;
+    setDirty(false);
   }
 
-  function forceClose() {
+  // Reset + close. FormModal runs the unsaved-changes guard before calling this.
+  function resetAndClose() {
     setDialogOpen(false);
     setEditingId(null);
     setFieldErrors({});
     setForm({ ...emptyForm, attributes: {} });
-    dirtyRef.current = false;
+    setDirty(false);
   }
 
-  async function closeDialog() {
-    if (dirtyRef.current) {
-      const ok = await confirm({
-        title: 'Discard changes?',
-        message: 'You have unsaved changes. Close without saving?',
-        confirmLabel: 'Discard',
-        cancelLabel: 'Keep editing',
-        danger: true,
-      });
-      if (!ok) return;
-    }
-    forceClose();
+  function onSort(key: SortKey) {
+    setSort((prev) =>
+      prev && prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' },
+    );
+    setPage(1);
   }
 
   function onSubmit(e: FormEvent) {
@@ -308,13 +301,15 @@ export function ItemsPage() {
         const qs = new URLSearchParams({ pageSize: '100', page: String(p) });
         if (typeId) qs.set('inventoryTypeId', typeId);
         if (debouncedSearch.trim()) qs.set('q', debouncedSearch.trim());
+        if (lowOnly) qs.set('belowReorder', '1');
+        if (sort) qs.set('sort', `${sort.key}:${sort.dir}`);
         const res = (await api<Item[]>(`/inventory-items?${qs}`)) as ApiEnvelope<Item[]>;
         all.push(...res.data);
         const totalPages = res.meta?.totalPages ?? 1;
         if (p >= totalPages || res.data.length === 0) break;
         p += 1;
       }
-      const attrKeys = columns.map((c) => c.key);
+      const attrKeys = shownCols.map((c) => c.key);
       const header = ['sku', 'name', 'type', 'quantity', 'minQuantity', ...attrKeys];
       const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const rows = all.map((it) =>
@@ -347,15 +342,48 @@ export function ItemsPage() {
 
   const typeOptions = useMemo(() => typesQuery.data ?? [], [typesQuery.data]);
   const formFields = formSchemaQuery.data ?? [];
-  const columns = columnSchemaQuery.data ?? [];
   const meta = itemsQuery.data?.meta ?? null;
   const items = itemsQuery.data?.data ?? [];
+
+  // Attribute columns available for the current filter type, and which are shown (B3).
+  const availableCols = useMemo(
+    () => (columnSchemaQuery.data ?? []).filter((f) => f.isVisible && f.isActive),
+    [columnSchemaQuery.data],
+  );
+  const effectiveColKeys = useMemo(
+    () => selectedCols ?? availableCols.slice(0, DEFAULT_ATTR_COLS).map((c) => c.key),
+    [selectedCols, availableCols],
+  );
+  const shownCols = useMemo(
+    () => availableCols.filter((c) => effectiveColKeys.includes(c.key)),
+    [availableCols, effectiveColKeys],
+  );
+  function toggleCol(key: string) {
+    setSelectedCols((prev) => {
+      const base = prev ?? availableCols.slice(0, DEFAULT_ATTR_COLS).map((c) => c.key);
+      return base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+    });
+  }
+
+  const historyColumns: DvColumn<StockTx>[] = [
+    { key: 'when', header: 'When', cardLabel: 'When', render: (tx) => new Date(tx.createdAt).toLocaleString() },
+    { key: 'type', header: 'Type', cardLabel: 'Type', render: (tx) => TX_LABEL[tx.type] },
+    { key: 'qty', header: 'Qty', cardLabel: 'Qty', align: 'end', render: (tx) => String(tx.quantity) },
+    { key: 'after', header: 'After', cardLabel: 'After', align: 'end', render: (tx) => String(tx.quantityAfter) },
+    {
+      key: 'party',
+      header: 'Party / reason',
+      cardLabel: 'Party / reason',
+      render: (tx) =>
+        tx.type === 'ADJUSTMENT' ? tx.notes || '—' : tx.supplier?.name ?? tx.buyer?.name ?? tx.notes ?? '—',
+    },
+  ];
 
   return (
     <div className="stack">
       <div className="page-header">
         <div>
-          <h2 className="page-title">Inventory Items</h2>
+          <h2 className="page-title">Items</h2>
           <p className="muted">Core fields plus dynamic attributes from the type schema.</p>
         </div>
         <div className="row">
@@ -372,19 +400,28 @@ export function ItemsPage() {
 
       <div className="card stack">
         <div className="row toolbar">
-          <input
-            className="input"
-            placeholder="Search SKU or name…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <div className="search-field">
+            <svg className="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.3-4.3" />
+            </svg>
+            <input
+              className="input"
+              placeholder="Search SKU or name…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label="Search items"
+            />
+          </div>
           <select
             className="select"
             value={typeId}
             onChange={(e) => {
               setTypeId(e.target.value);
               setPage(1);
+              setSelectedCols(null);
             }}
+            aria-label="Filter by type"
           >
             <option value="">All types</option>
             {typeOptions.map((t) => (
@@ -393,37 +430,63 @@ export function ItemsPage() {
               </option>
             ))}
           </select>
+          <label className="check-pill">
+            <input
+              type="checkbox"
+              checked={lowOnly}
+              onChange={(e) => {
+                setLowOnly(e.target.checked);
+                setPage(1);
+              }}
+            />
+            Low stock only
+          </label>
+          {typeId && availableCols.length > 0 ? (
+            <details className="col-picker">
+              <summary className="btn secondary">
+                Columns ({shownCols.length}/{availableCols.length})
+              </summary>
+              <div className="col-picker-menu">
+                <div className="picker-head">Attribute columns</div>
+                {availableCols.map((c) => (
+                  <label key={c.id}>
+                    <input
+                      type="checkbox"
+                      checked={effectiveColKeys.includes(c.key)}
+                      onChange={() => toggleCol(c.key)}
+                    />
+                    {c.displayName}
+                  </label>
+                ))}
+              </div>
+            </details>
+          ) : null}
         </div>
 
         <DynamicTable
           items={items}
-          fields={columns}
+          fields={shownCols}
           loading={itemsQuery.isLoading}
           sort={sort}
-          onSort={(key: SortKey) =>
-            setSort((prev) =>
-              prev && prev.key === key
-                ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-                : { key, dir: 'asc' },
-            )
-          }
+          onSort={onSort}
           onHistory={(id, label) => setHistoryItem({ id, label })}
           deletingId={remove.isPending ? (remove.variables as string) : null}
           onEdit={canWrite ? (id) => void openEdit(id) : undefined}
-          onDelete={!canWrite ? undefined : async (id, label) => {
-            const ok = await confirm({
-              title: 'Delete item',
-              message: `Delete "${label}"? This cannot be undone.`,
-              confirmLabel: 'Delete',
-              danger: true,
-            });
-            if (ok) remove.mutate(id);
-          }}
+          onDelete={
+            !canWrite
+              ? undefined
+              : async (id, label) => {
+                  const ok = await confirm({
+                    title: 'Delete item',
+                    message: `Delete "${label}"? This cannot be undone.`,
+                    confirmLabel: 'Delete',
+                    danger: true,
+                  });
+                  if (ok) remove.mutate(id);
+                }
+          }
+          emptyMessage={canWrite ? 'Add one with “+ Add Item”.' : 'No items match your search or filter.'}
         />
-
-        {!itemsQuery.isLoading && items.length === 0 ? (
-          <p className="muted">No items match. Add one with “+ Add Item”.</p>
-        ) : null}
 
         {meta && meta.total > PAGE_SIZE ? (
           <div className="row spread pagination">
@@ -452,147 +515,114 @@ export function ItemsPage() {
         ) : null}
       </div>
 
-      {dialogOpen ? (
-        <div className="modal-backdrop" onClick={closeDialog}>
-          <div
-            ref={trapRef}
-            className={`modal card stack${editingId ? ' edit-mode' : ''}`}
-            role="dialog"
-            aria-modal="true"
-            aria-label={editingId ? `Edit item ${form.sku}` : 'Add item'}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="row spread">
-              <div>
-                <h3 className="page-title">
-                  {editingId ? (
-                    <>
-                      <span className="edit-badge">Editing</span> {form.sku || 'item'}
-                    </>
-                  ) : (
-                    'Add item'
-                  )}
-                </h3>
-                <p className="modal-subtitle">
-                  {editingId
-                    ? 'Updating an existing item — its inventory type is fixed.'
-                    : 'Create a new item for a chosen inventory type.'}
-                </p>
-              </div>
-              <button type="button" className="icon-btn" aria-label="Close" onClick={closeDialog}>
-                ×
-              </button>
+      <FormModal
+        open={dialogOpen}
+        title="Add item"
+        editingLabel={editingId ? form.sku || 'item' : null}
+        subtitle={
+          editingId
+            ? 'Updating an existing item — its inventory type is fixed.'
+            : 'Create a new item for a chosen inventory type.'
+        }
+        submitLabel={editingId ? 'Save changes' : 'Add item'}
+        submitting={save.isPending}
+        submitDisabled={!formTypeId}
+        dirty={dirty}
+        onSubmit={onSubmit}
+        onClose={resetAndClose}
+      >
+        {!editingId ? (
+          <label className="label" htmlFor="item-type">
+            <span>Inventory type<span className="req-star" aria-hidden>*</span></span>
+            <select
+              id="item-type"
+              className="select"
+              value={formTypeId}
+              onChange={(e) => {
+                setFormTypeId(e.target.value);
+                setForm((prev) => ({ ...prev, attributes: {} }));
+              }}
+              required
+            >
+              <option value="">Select a type…</option>
+              {typeOptions.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
+        {formTypeId ? (
+          <>
+            <div className="grid cols-2">
+              <label className="label" htmlFor="item-sku">
+                <span>SKU<span className="req-star" aria-hidden>*</span></span>
+                <input
+                  id="item-sku"
+                  className="input"
+                  value={form.sku}
+                  onChange={(e) => change({ sku: e.target.value })}
+                  aria-invalid={Boolean(fieldErrors.sku)}
+                  required
+                />
+                {fieldErrors.sku ? <small className="field-error">{fieldErrors.sku}</small> : null}
+              </label>
+              <label className="label" htmlFor="item-name">
+                <span>Name<span className="req-star" aria-hidden>*</span></span>
+                <input
+                  id="item-name"
+                  className="input"
+                  value={form.name}
+                  onChange={(e) => change({ name: e.target.value })}
+                  aria-invalid={Boolean(fieldErrors.name)}
+                  required
+                />
+                {fieldErrors.name ? <small className="field-error">{fieldErrors.name}</small> : null}
+              </label>
+              <label className="label" htmlFor="item-qty">
+                Quantity
+                <input
+                  id="item-qty"
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={form.quantity}
+                  onChange={(e) => change({ quantity: Number(e.target.value) })}
+                />
+              </label>
+              <label className="label" htmlFor="item-minqty">
+                Min quantity
+                <input
+                  id="item-minqty"
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={form.minQuantity}
+                  onChange={(e) => change({ minQuantity: Number(e.target.value) })}
+                />
+              </label>
             </div>
 
-            <form className="stack" onSubmit={onSubmit} noValidate>
-              {!editingId ? (
-                <label className="label" htmlFor="item-type">
-                  Inventory type
-                  <select
-                    id="item-type"
-                    className="select"
-                    value={formTypeId}
-                    onChange={(e) => {
-                      setFormTypeId(e.target.value);
-                      setForm((prev) => ({ ...prev, attributes: {} }));
-                    }}
-                    required
-                  >
-                    <option value="">Select a type…</option>
-                    {typeOptions.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-
-              {formTypeId ? (
-                <>
-                  <div className="grid cols-2">
-                    <label className="label" htmlFor="item-sku">
-                      SKU
-                      <input
-                        id="item-sku"
-                        className="input"
-                        value={form.sku}
-                        onChange={(e) => change({ sku: e.target.value })}
-                        aria-invalid={Boolean(fieldErrors.sku)}
-                        required
-                      />
-                      {fieldErrors.sku ? <small className="field-error">{fieldErrors.sku}</small> : null}
-                    </label>
-                    <label className="label" htmlFor="item-name">
-                      Name
-                      <input
-                        id="item-name"
-                        className="input"
-                        value={form.name}
-                        onChange={(e) => change({ name: e.target.value })}
-                        aria-invalid={Boolean(fieldErrors.name)}
-                        required
-                      />
-                      {fieldErrors.name ? <small className="field-error">{fieldErrors.name}</small> : null}
-                    </label>
-                    <label className="label" htmlFor="item-qty">
-                      Quantity
-                      <input
-                        id="item-qty"
-                        className="input"
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={form.quantity}
-                        onChange={(e) => change({ quantity: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label className="label" htmlFor="item-minqty">
-                      Min quantity
-                      <input
-                        id="item-minqty"
-                        className="input"
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={form.minQuantity}
-                        onChange={(e) => change({ minQuantity: Number(e.target.value) })}
-                      />
-                    </label>
-                  </div>
-
-                  {formFields.length ? (
-                    <>
-                      <h4 className="page-title">Attributes</h4>
-                      <DynamicForm
-                        fields={formFields}
-                        values={form.attributes}
-                        errors={fieldErrors}
-                        onChange={(attributes) => change({ attributes })}
-                      />
-                    </>
-                  ) : null}
-                </>
-              ) : (
-                <p className="muted">Select an inventory type to continue.</p>
-              )}
-
-              <div className="row actions">
-                <button
-                  className="btn"
-                  type="submit"
-                  disabled={save.isPending || !formTypeId}
-                >
-                  {save.isPending ? 'Saving…' : editingId ? 'Save changes' : 'Add item'}
-                </button>
-                <button type="button" className="btn secondary" onClick={closeDialog}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
+            {formFields.length ? (
+              <>
+                <h4 className="page-title">Attributes</h4>
+                <DynamicForm
+                  fields={formFields}
+                  values={form.attributes}
+                  errors={fieldErrors}
+                  onChange={(attributes) => change({ attributes })}
+                />
+              </>
+            ) : null}
+          </>
+        ) : (
+          <p className="muted">Select an inventory type to continue.</p>
+        )}
+      </FormModal>
 
       {historyItem ? (
         <div className="modal-backdrop" onClick={() => setHistoryItem(null)}>
@@ -619,39 +649,26 @@ export function ItemsPage() {
               </button>
             </div>
             {historyQuery.isLoading && historyRows.length === 0 ? (
-              <p className="muted">Loading…</p>
+              <DataView
+                caption="Loading movements"
+                columns={historyColumns}
+                rows={[]}
+                rowKey={(tx) => tx.id}
+                loading
+              />
             ) : historyRows.length === 0 ? (
-              <p className="muted">No stock movements recorded for this item yet.</p>
+              <EmptyState
+                title="No movements yet"
+                message="No stock movements have been recorded for this item."
+              />
             ) : (
               <>
-                <div className="table-wrap">
-                  <table className="table cards" aria-label={`Movements for ${historyItem.label}`}>
-                    <thead>
-                      <tr>
-                        <th>When</th>
-                        <th>Type</th>
-                        <th>Qty</th>
-                        <th>After</th>
-                        <th>Party / reason</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historyRows.map((tx) => (
-                        <tr key={tx.id}>
-                          <td data-label="When">{new Date(tx.createdAt).toLocaleString()}</td>
-                          <td data-label="Type">{TX_LABEL[tx.type]}</td>
-                          <td className="num" data-label="Qty">{String(tx.quantity)}</td>
-                          <td className="num" data-label="After">{String(tx.quantityAfter)}</td>
-                          <td data-label="Party / reason">
-                            {tx.type === 'ADJUSTMENT'
-                              ? tx.notes || '—'
-                              : tx.supplier?.name ?? tx.buyer?.name ?? tx.notes ?? '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <DataView
+                  caption={`Movements for ${historyItem.label}`}
+                  columns={historyColumns}
+                  rows={historyRows}
+                  rowKey={(tx) => tx.id}
+                />
                 {hasMoreHistory ? (
                   <div className="row spread pagination">
                     <span className="muted">

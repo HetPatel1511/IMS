@@ -47,10 +47,23 @@ export class BuyersService {
         where,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
-        orderBy: { name: 'asc' },
+        orderBy: this.parseSort(query.sort),
       }),
     ]);
     return { data, meta: paginateMeta(query.page, query.pageSize, total) };
+  }
+
+  // Parse a `field:dir` sort param into a Prisma orderBy, defaulting to name A→Z.
+  // Only whitelisted columns are accepted; anything else falls back to the default,
+  // so existing callers that send no sort keep the previous ordering unchanged.
+  private parseSort(sort?: string): Prisma.BuyerOrderByWithRelationInput {
+    const allowed = new Set(['code', 'name', 'email', 'phone']);
+    if (!sort) return { name: 'asc' };
+    const [field, dirRaw] = sort.split(':');
+    const dir: Prisma.SortOrder = dirRaw === 'asc' ? 'asc' : 'desc';
+    if (allowed.has(field))
+      return { [field]: dir } as Prisma.BuyerOrderByWithRelationInput;
+    return { name: 'asc' };
   }
 
   async findOne(id: string) {

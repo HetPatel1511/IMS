@@ -140,12 +140,25 @@ export class InventoryItemsService {
         where,
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
-        orderBy: query.belowReorder ? { quantity: 'asc' } : { updatedAt: 'desc' },
+        orderBy: query.belowReorder ? { quantity: 'asc' } : this.parseSort(query.sort),
         include: this.defaultInclude(),
       }),
     ]);
 
     return { data, meta: paginateMeta(query.page, query.pageSize, total) };
+  }
+
+  // Parse a `field:dir` sort param into a Prisma orderBy, defaulting to most-recently
+  // updated first. Only whitelisted columns are accepted; anything else falls back to the
+  // default, so existing callers that send no sort keep the previous ordering unchanged.
+  private parseSort(sort?: string): Prisma.InventoryItemOrderByWithRelationInput {
+    const allowed = new Set(['sku', 'name', 'quantity']);
+    if (!sort) return { updatedAt: 'desc' };
+    const [field, dirRaw] = sort.split(':');
+    const dir: Prisma.SortOrder = dirRaw === 'asc' ? 'asc' : 'desc';
+    if (allowed.has(field))
+      return { [field]: dir } as Prisma.InventoryItemOrderByWithRelationInput;
+    return { updatedAt: 'desc' };
   }
 
   async findOne(id: string) {

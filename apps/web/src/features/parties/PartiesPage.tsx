@@ -5,11 +5,9 @@ import { api, toErrorMessage, type ApiEnvelope } from '../../shared/api';
 import { useToast } from '../../shared/toast';
 import { useConfirm } from '../../shared/confirm';
 import { useAuth } from '../../shared/auth';
-import { SkeletonRows } from '../../shared/Skeleton';
-import { SortableTh, sortRows, useClientSort } from '../../shared/SortHeader';
 import { FormModal } from '../../shared/FormModal';
-
-type PartyKey = 'code' | 'name' | 'email' | 'phone';
+import { DataView, type Column, type DataSort } from '../../ui/DataView';
+import { EmptyState } from '../../ui/EmptyState';
 
 type Party = {
   id: string;
@@ -35,7 +33,8 @@ function PartyPage({
   const confirm = useConfirm();
   const { user } = useAuth();
   const canWrite = hasMinRole((user?.role ?? 'VIEWER') as UserRole, 'ADMIN');
-  const { sort, toggle } = useClientSort<PartyKey>();
+  // Sorting now spans the whole dataset via the server `sort` param (A1).
+  const [sort, setSort] = useState<DataSort>(null);
   const singular = title.replace(/s$/, '');
 
   const [form, setForm] = useState({ ...emptyForm });
@@ -46,12 +45,22 @@ function PartyPage({
   const [page, setPage] = useState(1);
 
   const list = useQuery({
-    queryKey: [resource, page],
-    queryFn: async () =>
-      api<Party[]>(`/${resource}?page=${page}&pageSize=${PAGE_SIZE}`) as Promise<ApiEnvelope<Party[]>>,
+    queryKey: [resource, page, sort],
+    queryFn: async () => {
+      const qs = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
+      if (sort) qs.set('sort', `${sort.key}:${sort.dir}`);
+      return api<Party[]>(`/${resource}?${qs}`) as Promise<ApiEnvelope<Party[]>>;
+    },
   });
-  const rowsData = list.data?.data ?? [];
+  const rows = list.data?.data ?? [];
   const meta = list.data?.meta ?? null;
+
+  function onSort(key: string) {
+    setSort((prev) =>
+      prev && prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' },
+    );
+    setPage(1);
+  }
 
   function change(patch: Partial<typeof emptyForm>) {
     setDirty(true);
@@ -143,7 +152,30 @@ function PartyPage({
     save.mutate();
   }
 
-  const rows = sortRows(rowsData, sort, (r, k) => r[k as keyof Party]);
+  const columns: Column<Party>[] = [
+    { key: 'code', header: 'Code', sortKey: 'code', render: (r) => r.code },
+    {
+      key: 'name',
+      header: 'Name',
+      sortKey: 'name',
+      render: (r) => (
+        <span className="cell-ellipsis" title={r.name}>
+          {r.name}
+        </span>
+      ),
+    },
+    {
+      key: 'email',
+      header: 'Email',
+      sortKey: 'email',
+      render: (r) => (
+        <span className="cell-ellipsis" title={r.email ?? ''}>
+          {r.email ?? '—'}
+        </span>
+      ),
+    },
+    { key: 'phone', header: 'Phone', sortKey: 'phone', render: (r) => r.phone ?? '—' },
+  ];
 
   return (
     <div className="stack">
@@ -159,63 +191,54 @@ function PartyPage({
         ) : null}
       </div>
 
-      <div className="card">
-        <div className="table-wrap">
-          <table className="table cards" aria-label={title}>
-            <thead>
-              <tr>
-                <SortableTh label="Code" sortKey="code" sort={sort} onSort={toggle} />
-                <SortableTh label="Name" sortKey="name" sort={sort} onSort={toggle} />
-                <SortableTh label="Email" sortKey="email" sort={sort} onSort={toggle} />
-                <SortableTh label="Phone" sortKey="phone" sort={sort} onSort={toggle} />
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {list.isLoading ? <SkeletonRows rows={4} cols={5} /> : null}
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td data-label="Code">{row.code}</td>
-                  <td data-label="Name"><span className="cell-ellipsis" title={row.name}>{row.name}</span></td>
-                  <td data-label="Email"><span className="cell-ellipsis" title={row.email ?? ''}>{row.email ?? '—'}</span></td>
-                  <td data-label="Phone">{row.phone ?? '—'}</td>
-                  <td data-label="Actions">
-                    {canWrite ? (
-                    <div className="row">
-                      <button type="button" className="btn secondary" onClick={() => openEdit(row)}>
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="btn secondary danger"
-                        disabled={remove.isPending && remove.variables === row.id}
-                        onClick={async () => {
-                          const ok = await confirm({
-                            title: `Delete ${singular.toLowerCase()}`,
-                            message: `Delete "${row.name}"? This cannot be undone.`,
-                            confirmLabel: 'Delete',
-                            danger: true,
-                          });
-                          if (ok) remove.mutate(row.id);
-                        }}
-                      >
-                        {remove.isPending && remove.variables === row.id ? 'Deleting…' : 'Delete'}
-                      </button>
-                    </div>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-              {!list.isLoading && rows.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="muted">
-                    No {title.toLowerCase()} yet — add your first with “+ Add {singular.toLowerCase()}”.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+      <div className="card stack">
+        <DataView
+          caption={title}
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          loading={list.isLoading}
+          sort={sort}
+          onSort={onSort}
+          actions={
+            canWrite
+              ? (row) => (
+                  <>
+                    <button type="button" className="btn secondary" onClick={() => openEdit(row)}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn secondary danger"
+                      disabled={remove.isPending && remove.variables === row.id}
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: `Delete ${singular.toLowerCase()}`,
+                          message: `Delete "${row.name}"? This cannot be undone.`,
+                          confirmLabel: 'Delete',
+                          danger: true,
+                        });
+                        if (ok) remove.mutate(row.id);
+                      }}
+                    >
+                      {remove.isPending && remove.variables === row.id ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </>
+                )
+              : undefined
+          }
+          empty={
+            <EmptyState
+              title={`No ${title.toLowerCase()} yet`}
+              message={
+                canWrite
+                  ? `Add your first with “+ Add ${singular.toLowerCase()}”.`
+                  : 'Nothing has been added here yet.'
+              }
+            />
+          }
+        />
+
         {meta && meta.total > PAGE_SIZE ? (
           <div className="row spread pagination">
             <span className="muted">
@@ -260,7 +283,7 @@ function PartyPage({
       >
         <div className="grid cols-2">
           <label className="label" htmlFor="party-code">
-            Code
+            <span>Code{!editingId ? <span className="req-star" aria-hidden>*</span> : null}</span>
             <input
               id="party-code"
               className="input"
@@ -275,7 +298,7 @@ function PartyPage({
             {fieldErrors.code ? <small className="field-error">{fieldErrors.code}</small> : null}
           </label>
           <label className="label" htmlFor="party-name">
-            Name
+            <span>Name<span className="req-star" aria-hidden>*</span></span>
             <input
               id="party-name"
               className="input"

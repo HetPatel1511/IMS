@@ -1,13 +1,15 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { hasMinRole, type UserRole } from '@ims/shared';
 import { api, toErrorMessage } from '../../shared/api';
 import { useToast } from '../../shared/toast';
 import { useAuth } from '../../shared/auth';
-import { SkeletonRows } from '../../shared/Skeleton';
+import { FormModal } from '../../shared/FormModal';
 import { formatNumber } from '../../shared/format';
-import { SortableTh, useClientSort } from '../../shared/SortHeader';
+import { useClientSort } from '../../shared/SortHeader';
 import { useSearchParams } from 'react-router-dom';
+import { DataView, type Column } from '../../ui/DataView';
+import { EmptyState } from '../../ui/EmptyState';
 
 type TxSortKey = 'createdAt' | 'type' | 'item' | 'inventoryType' | 'quantity' | 'quantityAfter';
 
@@ -37,6 +39,33 @@ type StockTx = {
   createdBy?: { fullName: string } | null;
 };
 
+type StockSummary = {
+  onHandValue: number;
+  totalUnits: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  movementsToday: number;
+  movementsTodayByType: { purchase: number; sale: number; adjustment: number };
+  netQtyThisWeek: number;
+};
+
+type LevelStatus = 'OK' | 'LOW' | 'OUT';
+
+type LevelRow = {
+  id: string;
+  sku: string;
+  name: string;
+  quantity: string | number;
+  minQuantity: string | number;
+  inventoryType: { id: string; code: string; name: string };
+  status: LevelStatus;
+  unitPrice: number | null;
+  onHandValue: number | null;
+  lastMovementAt: string | null;
+};
+
+type LevelSortKey = 'sku' | 'name' | 'quantity';
+
 type Filters = {
   type: '' | 'PURCHASE' | 'SALE' | 'ADJUSTMENT';
   inventoryTypeId: string;
@@ -63,6 +92,18 @@ const emptyFilters: Filters = {
 
 const formatNum = formatNumber;
 
+const TX_META: Record<StockTx['type'], { label: string; cls: string }> = {
+  PURCHASE: { label: 'Buy', cls: 'tx-buy' },
+  SALE: { label: 'Sell', cls: 'tx-sell' },
+  ADJUSTMENT: { label: 'Adjust', cls: 'tx-adjust' },
+};
+
+const STATUS_META: Record<LevelStatus, { label: string; cls: string }> = {
+  OK: { label: 'OK', cls: 'st-ok' },
+  LOW: { label: 'Low', cls: 'st-low' },
+  OUT: { label: 'Out', cls: 'st-out' },
+};
+
 function filtersFromParams(sp: URLSearchParams): Filters {
   const f = { ...emptyFilters };
   for (const key of Object.keys(emptyFilters) as (keyof Filters)[]) {
@@ -86,6 +127,24 @@ export function StockPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [mode, setMode] = useState<'buy' | 'sell' | 'adjust'>('buy');
+  // The Buy/Sell/Adjust form lives in a modal (opened from the header button, a
+  // Levels/Items "Manage stock" action, or the dashboard ?buy=<id> deep-link) rather
+  // than an always-open card, so the log and levels are visible on landing.
+  const [modalOpen, setModalOpen] = useState(() => Boolean(searchParams.get('buy')));
+  const [dirty, setDirty] = useState(false);
+  // Sub-view: the current-state "Levels" table vs. the "Movements" ledger. Kept in local
+  // state (not the URL) so it doesn't collide with the log's filter query-string.
+  const [view, setView] = useState<'levels' | 'movements'>('levels');
+  const [levelSearch, setLevelSearch] = useState('');
+  const [levelSearchDebounced, setLevelSearchDebounced] = useState('');
+  const [levelType, setLevelType] = useState('');
+  const [levelStatus, setLevelStatus] = useState<'' | 'low' | 'out'>('');
+  const [levelPage, setLevelPage] = useState(1);
+  const { sort: levelSort, toggle: toggleLevelSort } = useClientSort<LevelSortKey>({
+    key: 'quantity',
+    dir: 'asc',
+  });
+  const LEVEL_PAGE_SIZE = 20;
   const [filters, setFilters] = useState<Filters>(() => filtersFromParams(searchParams));
   const [applied, setApplied] = useState<Filters>(() => filtersFromParams(searchParams));
   const [txPage, setTxPage] = useState(1);
@@ -151,6 +210,33 @@ export function StockPage() {
     },
   });
 
+  const summaryQuery = useQuery({
+    queryKey: ['stock-summary'],
+    queryFn: async () => (await api<StockSummary>('/stock/summary')).data,
+  });
+
+  // Debounce the Levels search so we don't fire a request per keystroke.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setLevelSearchDebounced(levelSearch);
+      setLevelPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [levelSearch]);
+
+  const levelsQuery = useQuery({
+    queryKey: ['stock-levels', levelSearchDebounced, levelType, levelStatus, levelPage, levelSort],
+    enabled: view === 'levels',
+    queryFn: async () => {
+      const qs = new URLSearchParams({ pageSize: String(LEVEL_PAGE_SIZE), page: String(levelPage) });
+      if (levelSort) qs.set('sort', `${levelSort.key}:${levelSort.dir}`);
+      if (levelType) qs.set('inventoryTypeId', levelType);
+      if (levelStatus) qs.set('status', levelStatus);
+      if (levelSearchDebounced.trim()) qs.set('q', levelSearchDebounced.trim());
+      return api<LevelRow[]>(`/stock/levels?${qs}`);
+    },
+  });
+
   const selectedItem = itemsQuery.data?.find((i) => i.id === form.inventoryItemId);
 
   const mutate = useMutation({
@@ -181,21 +267,42 @@ export function StockPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['stock-transactions'] });
+      qc.invalidateQueries({ queryKey: ['stock-levels'] });
+      qc.invalidateQueries({ queryKey: ['stock-summary'] });
       qc.invalidateQueries({ queryKey: ['items'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
       toast.success(
         mode === 'buy' ? 'Purchase recorded' : mode === 'sell' ? 'Sale recorded' : 'Stock adjusted',
       );
-      setForm({
-        inventoryItemId: '',
-        partyId: '',
-        quantity: '',
-        unitPrice: '',
-        notes: '',
-      });
+      resetForm();
+      setModalOpen(false);
     },
     onError: (e) => toast.error(toErrorMessage(e)),
   });
+
+  function resetForm() {
+    setForm({ inventoryItemId: '', partyId: '', quantity: '', unitPrice: '', notes: '' });
+    setDirty(false);
+  }
+
+  // Update a form field and mark the modal dirty (drives the unsaved-changes guard).
+  function change(patch: Partial<typeof form>) {
+    setDirty(true);
+    setForm((f) => ({ ...f, ...patch }));
+  }
+
+  function openModal(next?: { mode?: 'buy' | 'sell' | 'adjust'; inventoryItemId?: string }) {
+    if (next?.mode) setMode(next.mode);
+    if (next?.inventoryItemId) setForm((f) => ({ ...f, inventoryItemId: next.inventoryItemId! }));
+    mutate.reset();
+    setModalOpen(true);
+  }
+
+  function closeModal() {
+    resetForm();
+    mutate.reset();
+    setModalOpen(false);
+  }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -265,6 +372,116 @@ export function StockPage() {
     ['inventoryTypeId', 'inventoryItemId', 'supplierId', 'buyerId', 'quantity', 'quantityMin', 'quantityMax'] as (keyof Filters)[]
   ).filter((k) => applied[k]).length;
 
+  const columns: Column<StockTx>[] = [
+    {
+      key: 'createdAt',
+      header: 'When',
+      cardLabel: 'When',
+      sortKey: 'createdAt',
+      render: (row) => new Date(row.createdAt).toLocaleString(),
+    },
+    {
+      key: 'type',
+      header: 'Type',
+      cardLabel: 'Type',
+      sortKey: 'type',
+      render: (row) => <span className={`tx-badge ${TX_META[row.type].cls}`}>{TX_META[row.type].label}</span>,
+    },
+    {
+      key: 'item',
+      header: 'Item',
+      cardLabel: 'Item',
+      sortKey: 'item',
+      render: (row) => (
+        <span className="cell-stack">
+          <span>{row.inventoryItem.sku}</span>
+          <span className="muted">{row.inventoryItem.name}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'inventoryType',
+      header: 'Item type',
+      cardLabel: 'Item type',
+      sortKey: 'inventoryType',
+      render: (row) => <span className="type-chip">{row.inventoryType.name}</span>,
+    },
+    {
+      key: 'party',
+      header: 'Party',
+      cardLabel: 'Party',
+      render: (row) =>
+        row.type === 'PURCHASE' ? row.supplier?.name ?? '—' : row.type === 'SALE' ? row.buyer?.name ?? '—' : '—',
+    },
+    { key: 'quantity', header: 'Qty', cardLabel: 'Qty', sortKey: 'quantity', align: 'end', render: (row) => formatNum(row.quantity) },
+    { key: 'before', header: 'Before', cardLabel: 'Before', align: 'end', render: (row) => formatNum(row.quantityBefore) },
+    { key: 'after', header: 'After', cardLabel: 'After', sortKey: 'quantityAfter', align: 'end', render: (row) => formatNum(row.quantityAfter) },
+    {
+      key: 'value',
+      header: 'Value',
+      cardLabel: 'Value',
+      align: 'end',
+      render: (row) =>
+        row.unitPrice != null && row.unitPrice !== ''
+          ? formatNum(Number(row.quantity) * Number(row.unitPrice))
+          : '—',
+    },
+    { key: 'by', header: 'By', cardLabel: 'By', render: (row) => row.createdBy?.fullName ?? '—' },
+  ];
+
+  const levelColumns: Column<LevelRow>[] = [
+    {
+      key: 'sku',
+      header: 'SKU',
+      cardLabel: 'SKU',
+      sortKey: 'sku',
+      render: (row) => <span className="cell-ellipsis" title={row.sku}>{row.sku}</span>,
+    },
+    {
+      key: 'name',
+      header: 'Name',
+      cardLabel: 'Name',
+      sortKey: 'name',
+      render: (row) => <span className="cell-ellipsis" title={row.name}>{row.name}</span>,
+    },
+    {
+      key: 'type',
+      header: 'Type',
+      cardLabel: 'Type',
+      render: (row) => <span className="type-chip">{row.inventoryType.name}</span>,
+    },
+    {
+      key: 'onHand',
+      header: 'On hand',
+      cardLabel: 'On hand',
+      sortKey: 'quantity',
+      align: 'end',
+      render: (row) => formatNum(row.quantity),
+    },
+    {
+      key: 'reorder',
+      header: 'Reorder @',
+      cardLabel: 'Reorder @',
+      align: 'end',
+      render: (row) => formatNum(row.minQuantity),
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      cardLabel: 'Status',
+      render: (row) => (
+        <span className={`st-badge ${STATUS_META[row.status].cls}`}>{STATUS_META[row.status].label}</span>
+      ),
+    },
+    {
+      key: 'value',
+      header: 'Value',
+      cardLabel: 'Value',
+      align: 'end',
+      render: (row) => (row.onHandValue != null ? formatNum(row.onHandValue) : '—'),
+    },
+  ];
+
   return (
     <div className="stack">
       <div className="page-header">
@@ -272,154 +489,385 @@ export function StockPage() {
           <h2 className="page-title">Stock</h2>
           <p className="muted">Buy from suppliers, sell to buyers, and review movement logs.</p>
         </div>
+        {canWrite ? (
+          <div className="row">
+            <button className="btn" type="button" onClick={() => openModal()}>
+              + Record movement
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {canWrite ? (
-      <div className="card stack">
-        <div className="row">
-          <button
-            type="button"
-            className={`btn${mode === 'buy' ? '' : ' secondary'}`}
-            onClick={() => {
-              setMode('buy');
-              setForm((f) => ({ ...f, partyId: '' }));
-            }}
-          >
-            Buy stock
-          </button>
-          <button
-            type="button"
-            className={`btn${mode === 'sell' ? '' : ' secondary'}`}
-            onClick={() => {
-              setMode('sell');
-              setForm((f) => ({ ...f, partyId: '' }));
-            }}
-          >
-            Sell stock
-          </button>
-          <button
-            type="button"
-            className={`btn${mode === 'adjust' ? '' : ' secondary'}`}
-            onClick={() => {
-              setMode('adjust');
-              setForm((f) => ({ ...f, partyId: '', unitPrice: '' }));
-            }}
-          >
-            Adjust stock
-          </button>
-        </div>
-
-        <form className="grid cols-2" onSubmit={onSubmit}>
-          <label className="label">
-            Item
-            <select
-              className="select"
-              value={form.inventoryItemId}
-              onChange={(e) => setForm({ ...form, inventoryItemId: e.target.value })}
-              required
+        <FormModal
+          open={modalOpen}
+          title="Record movement"
+          subtitle="Record a purchase, sale, or stock adjustment — it posts to the movement log."
+          submitLabel={
+            mode === 'buy' ? 'Confirm purchase' : mode === 'sell' ? 'Confirm sale' : 'Apply adjustment'
+          }
+          submitting={mutate.isPending}
+          dirty={dirty}
+          onSubmit={onSubmit}
+          onClose={closeModal}
+        >
+          <div className="seg" role="group" aria-label="Transaction mode">
+            <button
+              type="button"
+              className={`seg-btn${mode === 'buy' ? ' seg-on' : ''}`}
+              aria-pressed={mode === 'buy'}
+              onClick={() => {
+                setMode('buy');
+                change({ partyId: '' });
+              }}
             >
-              <option value="">Select item…</option>
-              {filteredItemsForForm.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.sku} — {item.name} (qty {formatNum(item.quantity)})
-                </option>
-              ))}
-            </select>
-          </label>
+              Buy stock
+            </button>
+            <button
+              type="button"
+              className={`seg-btn${mode === 'sell' ? ' seg-on' : ''}`}
+              aria-pressed={mode === 'sell'}
+              onClick={() => {
+                setMode('sell');
+                change({ partyId: '' });
+              }}
+            >
+              Sell stock
+            </button>
+            <button
+              type="button"
+              className={`seg-btn${mode === 'adjust' ? ' seg-on' : ''}`}
+              aria-pressed={mode === 'adjust'}
+              onClick={() => {
+                setMode('adjust');
+                change({ partyId: '', unitPrice: '' });
+              }}
+            >
+              Adjust stock
+            </button>
+          </div>
 
-          {mode !== 'adjust' ? (
+          <div className="grid cols-2">
             <label className="label">
-              {mode === 'buy' ? 'Supplier' : 'Buyer'}
+              <span>Item<span className="req-star" aria-hidden>*</span></span>
               <select
                 className="select"
-                value={form.partyId}
-                onChange={(e) => setForm({ ...form, partyId: e.target.value })}
+                value={form.inventoryItemId}
+                onChange={(e) => change({ inventoryItemId: e.target.value })}
                 required
               >
-                <option value="">Select…</option>
-                {(mode === 'buy' ? suppliersQuery.data : buyersQuery.data)?.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.code} — {p.name}
+                <option value="">Select item…</option>
+                {filteredItemsForForm.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.sku} — {item.name} (qty {formatNum(item.quantity)})
                   </option>
                 ))}
               </select>
             </label>
-          ) : null}
 
-          <label className="label">
-            {mode === 'adjust' ? 'New quantity' : 'Quantity'}
-            <input
-              className="input"
-              type="number"
-              min="0"
-              step="any"
-              value={form.quantity}
-              onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-              required
-            />
-          </label>
+            {mode !== 'adjust' ? (
+              <label className="label">
+                <span>{mode === 'buy' ? 'Supplier' : 'Buyer'}<span className="req-star" aria-hidden>*</span></span>
+                <select
+                  className="select"
+                  value={form.partyId}
+                  onChange={(e) => change({ partyId: e.target.value })}
+                  required
+                >
+                  <option value="">Select…</option>
+                  {(mode === 'buy' ? suppliersQuery.data : buyersQuery.data)?.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.code} — {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
-          {mode !== 'adjust' ? (
             <label className="label">
-              Unit price (optional)
+              <span>{mode === 'adjust' ? 'New quantity' : 'Quantity'}<span className="req-star" aria-hidden>*</span></span>
               <input
                 className="input"
                 type="number"
                 min="0"
                 step="any"
-                value={form.unitPrice}
-                onChange={(e) => setForm({ ...form, unitPrice: e.target.value })}
+                value={form.quantity}
+                onChange={(e) => change({ quantity: e.target.value })}
+                required
               />
             </label>
-          ) : null}
 
-          <label className="label label-span">
-            {mode === 'adjust' ? 'Reason (required)' : 'Notes'}
-            <textarea
-              className="textarea"
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              required={mode === 'adjust'}
-              placeholder={mode === 'adjust' ? 'e.g. cycle count correction, damage, found stock…' : undefined}
-            />
-          </label>
+            {mode !== 'adjust' ? (
+              <label className="label">
+                Unit price (optional)
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={form.unitPrice}
+                  onChange={(e) => change({ unitPrice: e.target.value })}
+                />
+              </label>
+            ) : null}
 
-          {selectedItem ? (
-            <p className="muted label-span">
-              Current stock: <span className="num">{formatNum(selectedItem.quantity)}</span>
-            </p>
-          ) : null}
+            <label className="label label-span">
+              <span>{mode === 'adjust' ? 'Reason' : 'Notes'}{mode === 'adjust' ? <span className="req-star" aria-hidden>*</span> : null}</span>
+              <textarea
+                className="textarea"
+                value={form.notes}
+                onChange={(e) => change({ notes: e.target.value })}
+                required={mode === 'adjust'}
+                placeholder={mode === 'adjust' ? 'e.g. cycle count correction, damage, found stock…' : undefined}
+              />
+            </label>
 
-          {mutate.isError ? (
-            <div className="error label-span">{toErrorMessage(mutate.error)}</div>
-          ) : null}
+            {selectedItem ? (
+              <p className="muted label-span stock-preview">
+                {mode === 'adjust' ? (
+                  <>
+                    Current stock: <span className="num">{formatNum(selectedItem.quantity)}</span>
+                    {form.quantity !== '' ? (
+                      <> → After: <span className="num preview-after">{formatNum(Number(form.quantity))}</span></>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    Current stock: <span className="num">{formatNum(selectedItem.quantity)}</span>
+                    {form.quantity !== '' ? (
+                      <> → After: <span className="num preview-after">{formatNum(
+                        mode === 'buy'
+                          ? Number(selectedItem.quantity) + Number(form.quantity)
+                          : Number(selectedItem.quantity) - Number(form.quantity),
+                      )}</span></>
+                    ) : null}
+                  </>
+                )}
+              </p>
+            ) : null}
 
-          <div className="row actions label-span">
-            <button className="btn" type="submit" disabled={mutate.isPending}>
-              {mutate.isPending
-                ? 'Working…'
-                : mode === 'buy'
-                  ? 'Confirm purchase'
-                  : mode === 'sell'
-                    ? 'Confirm sale'
-                    : 'Apply adjustment'}
-            </button>
+            {mutate.isError ? (
+              <div className="error label-span">{toErrorMessage(mutate.error)}</div>
+            ) : null}
           </div>
-        </form>
-      </div>
+        </FormModal>
       ) : null}
 
+      <div className="grid stats kpi-strip">
+        <button
+          type="button"
+          className="card stat stat-link"
+          onClick={() => setView('levels')}
+        >
+          <span className="stat-label">On-hand value</span>
+          <strong>{summaryQuery.data ? formatNum(summaryQuery.data.onHandValue) : '—'}</strong>
+          <span className="stat-sub">at latest purchase cost</span>
+        </button>
+        <button type="button" className="card stat stat-link" onClick={() => setView('levels')}>
+          <span className="stat-label">Stock units</span>
+          <strong>{summaryQuery.data ? formatNum(summaryQuery.data.totalUnits) : '—'}</strong>
+          <span className="stat-sub">on hand across items</span>
+        </button>
+        <button
+          type="button"
+          className={`card stat stat-link${summaryQuery.data && summaryQuery.data.lowStockCount > 0 ? ' stat-alert' : ''}`}
+          onClick={() => {
+            setView('levels');
+            setLevelStatus('low');
+            setLevelPage(1);
+          }}
+        >
+          <span className="stat-label">Low / out of stock</span>
+          <strong>{summaryQuery.data ? formatNum(summaryQuery.data.lowStockCount) : '—'}</strong>
+          <span className="stat-sub">
+            {summaryQuery.data ? `${formatNum(summaryQuery.data.outOfStockCount)} out of stock` : 'needs reorder'}
+          </span>
+        </button>
+        <button type="button" className="card stat stat-link" onClick={() => setView('movements')}>
+          <span className="stat-label">Movements today</span>
+          <strong>{summaryQuery.data ? formatNum(summaryQuery.data.movementsToday) : '—'}</strong>
+          <span className="stat-sub">
+            {summaryQuery.data
+              ? `${summaryQuery.data.movementsTodayByType.purchase} buy · ${summaryQuery.data.movementsTodayByType.sale} sell`
+              : ' '}
+          </span>
+        </button>
+        <div className="card stat">
+          <span className="stat-label">Net qty this week</span>
+          <strong className={summaryQuery.data && summaryQuery.data.netQtyThisWeek > 0 ? 'net-up' : undefined}>
+            {summaryQuery.data
+              ? `${summaryQuery.data.netQtyThisWeek > 0 ? '+' : ''}${formatNum(summaryQuery.data.netQtyThisWeek)}`
+              : '—'}
+          </strong>
+          <span className="stat-sub">purchased − sold</span>
+        </div>
+      </div>
+
+      <div className="subtabs" role="tablist" aria-label="Stock view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'levels'}
+          className={`subtab${view === 'levels' ? ' subtab-on' : ''}`}
+          onClick={() => setView('levels')}
+        >
+          Levels
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'movements'}
+          className={`subtab${view === 'movements' ? ' subtab-on' : ''}`}
+          onClick={() => setView('movements')}
+        >
+          Movements
+        </button>
+      </div>
+
+      {view === 'levels' ? (
+        <div className="card stack">
+          <div className="log-toolbar">
+            <form className="log-search" onSubmit={(e) => e.preventDefault()} role="search">
+              <div className="search-field">
+                <svg className="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M21 21l-4.3-4.3" />
+                </svg>
+                <input
+                  className="input"
+                  value={levelSearch}
+                  onChange={(e) => setLevelSearch(e.target.value)}
+                  placeholder="Search SKU or name…"
+                  aria-label="Search stock levels"
+                />
+              </div>
+            </form>
+            <select
+              className="select"
+              value={levelType}
+              onChange={(e) => {
+                setLevelType(e.target.value);
+                setLevelPage(1);
+              }}
+              aria-label="Filter by item type"
+            >
+              <option value="">All types</option>
+              {(typesQuery.data ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+            <div className="seg" role="group" aria-label="Filter by status">
+              {([['', 'All'], ['low', 'Low'], ['out', 'Out']] as const).map(([val, label]) => (
+                <button
+                  key={val || 'all'}
+                  type="button"
+                  className={`seg-btn${levelStatus === val ? ' seg-on' : ''}`}
+                  aria-pressed={levelStatus === val}
+                  onClick={() => {
+                    setLevelStatus(val);
+                    setLevelPage(1);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {levelsQuery.isError ? <p className="error">{toErrorMessage(levelsQuery.error)}</p> : null}
+
+          <DataView
+            caption="Stock levels"
+            columns={levelColumns}
+            rows={levelsQuery.data?.data ?? []}
+            rowKey={(r) => r.id}
+            loading={levelsQuery.isLoading}
+            sort={levelSort}
+            onSort={(k) => toggleLevelSort(k as LevelSortKey)}
+            actions={
+              canWrite
+                ? (row) => (
+                    <div className="row">
+                      <button
+                        type="button"
+                        className="btn secondary btn-sm"
+                        onClick={() => openModal({ mode: 'buy', inventoryItemId: row.id })}
+                      >
+                        Buy
+                      </button>
+                      <button
+                        type="button"
+                        className="btn secondary btn-sm"
+                        onClick={() => openModal({ mode: 'sell', inventoryItemId: row.id })}
+                      >
+                        Sell
+                      </button>
+                      <button
+                        type="button"
+                        className="btn secondary btn-sm"
+                        onClick={() => openModal({ mode: 'adjust', inventoryItemId: row.id })}
+                      >
+                        Adjust
+                      </button>
+                    </div>
+                  )
+                : undefined
+            }
+            empty={
+              <EmptyState
+                title="No items match"
+                message={levelStatus ? 'No items match this status filter.' : 'Add items to see their stock levels.'}
+              />
+            }
+          />
+
+          {levelsQuery.data?.meta && (levelsQuery.data.meta.totalPages ?? 1) > 1 ? (
+            <div className="row spread pagination">
+              <span className="muted">
+                Page {levelsQuery.data.meta.page} of {levelsQuery.data.meta.totalPages} ·{' '}
+                {levelsQuery.data.meta.total} items
+              </span>
+              <div className="row">
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={levelPage <= 1}
+                  onClick={() => setLevelPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={levelPage >= (levelsQuery.data.meta.totalPages ?? 1)}
+                  onClick={() => setLevelPage((p) => p + 1)}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : (
       <div className="card stack">
-        <h3 className="page-title">Transaction logs</h3>
+        <h3 className="page-title">Transaction log</h3>
         <div className="log-toolbar">
           <form className="log-search" onSubmit={applyFilters} role="search">
-            <input
-              className="input"
-              value={filters.q}
-              onChange={(e) => setFilters({ ...filters, q: e.target.value })}
-              placeholder="Search SKU, item, party, notes…"
-              aria-label="Search transactions"
-            />
+            <div className="search-field">
+              <svg className="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.3-4.3" />
+              </svg>
+              <input
+                className="input"
+                value={filters.q}
+                onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+                placeholder="Search SKU, item, party, notes…"
+                aria-label="Search transactions"
+              />
+            </div>
           </form>
           <div className="seg" role="group" aria-label="Filter by type">
             {([['', 'All'], ['PURCHASE', 'Purchases'], ['SALE', 'Sales'], ['ADJUSTMENT', 'Adjustments']] as const).map(
@@ -456,7 +904,7 @@ export function StockPage() {
                 onClick={() => applyPatch({ [c.key]: '' } as Partial<Filters>)}
                 aria-label={`Remove filter ${c.label}`}
               >
-                {c.label} <span aria-hidden>×</span>
+                {c.label} <span className="chip-x" aria-hidden>×</span>
               </button>
             ))}
             <button type="button" className="chip-clear" onClick={clearAllFilters}>
@@ -592,68 +1040,20 @@ export function StockPage() {
         </form>
         ) : null}
 
-        {txQuery.isLoading ? <p className="muted">Loading transactions…</p> : null}
         {txQuery.isError ? (
           <p className="error">{toErrorMessage(txQuery.error)}</p>
         ) : null}
 
-        <div className="table-wrap">
-          <table className="table cards" aria-label="Stock transactions">
-            <thead>
-              <tr>
-                <SortableTh label="When" sortKey="createdAt" sort={txSort} onSort={toggleTxSort} />
-                <SortableTh label="Type" sortKey="type" sort={txSort} onSort={toggleTxSort} />
-                <SortableTh label="Item" sortKey="item" sort={txSort} onSort={toggleTxSort} />
-                <SortableTh label="Item type" sortKey="inventoryType" sort={txSort} onSort={toggleTxSort} />
-                <th>Party</th>
-                <SortableTh label="Qty" sortKey="quantity" sort={txSort} onSort={toggleTxSort} />
-                <th>Before</th>
-                <SortableTh label="After" sortKey="quantityAfter" sort={txSort} onSort={toggleTxSort} />
-                <th>Value</th>
-                <th>By</th>
-              </tr>
-            </thead>
-            <tbody>
-              {txQuery.isLoading ? <SkeletonRows rows={6} cols={10} /> : null}
-              {(txQuery.data?.data ?? []).map((row) => (
-                <tr key={row.id}>
-                  <td className="num" data-label="When">{new Date(row.createdAt).toLocaleString()}</td>
-                  <td data-label="Type">
-                    {row.type === 'PURCHASE' ? 'Buy' : row.type === 'SALE' ? 'Sell' : 'Adjust'}
-                  </td>
-                  <td data-label="Item">
-                    <span className="cell-stack">
-                      {row.inventoryItem.sku}
-                      <span className="muted">{row.inventoryItem.name}</span>
-                    </span>
-                  </td>
-                  <td data-label="Item type">{row.inventoryType.name}</td>
-                  <td data-label="Party">
-                    {row.type === 'PURCHASE'
-                      ? row.supplier?.name ?? '—'
-                      : row.buyer?.name ?? '—'}
-                  </td>
-                  <td className="num" data-label="Qty">{formatNum(row.quantity)}</td>
-                  <td className="num" data-label="Before">{formatNum(row.quantityBefore)}</td>
-                  <td className="num" data-label="After">{formatNum(row.quantityAfter)}</td>
-                  <td className="num" data-label="Value">
-                    {row.unitPrice != null && row.unitPrice !== ''
-                      ? formatNum(Number(row.quantity) * Number(row.unitPrice))
-                      : '—'}
-                  </td>
-                  <td data-label="By">{row.createdBy?.fullName ?? '—'}</td>
-                </tr>
-              ))}
-              {!txQuery.isLoading && !(txQuery.data?.data?.length ?? 0) ? (
-                <tr>
-                  <td colSpan={10} className="muted">
-                    No transactions match these filters.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+        <DataView
+          caption="Stock transactions"
+          columns={columns}
+          rows={txQuery.data?.data ?? []}
+          rowKey={(r) => r.id}
+          loading={txQuery.isLoading}
+          sort={txSort}
+          onSort={(k) => toggleTxSort(k as TxSortKey)}
+          empty={<EmptyState title="No transactions match" message="No stock movements match these filters yet." />}
+        />
 
         {txQuery.data?.meta && (txQuery.data.meta.totalPages ?? 1) > 1 ? (
           <div className="row spread pagination">
@@ -682,6 +1082,7 @@ export function StockPage() {
           </div>
         ) : null}
       </div>
+      )}
     </div>
   );
 }
