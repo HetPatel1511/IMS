@@ -590,6 +590,14 @@ th.sortable .sort-ind {
     grid-template-columns: 1fr;
   }
 
+  /* The rail/collapse control only applies to the persistent desktop sidebar
+     (@media min-width:721px). Below that the sidebar is the hamburger-toggled
+     drawer, so the collapse button has no effect — hide it. Scoped to
+     .brand-row-actions to win over the base .collapse-rail-btn display rule. */
+  .brand-row-actions .rail-toggle {
+    display: none;
+  }
+
   .mobile-header {
     display: flex;
   }
@@ -1206,8 +1214,6 @@ th.sortable .sort-ind {
 .drag-handle:active { cursor: grabbing; }
 tr.dragging { opacity: 0.4; }
 tr.drag-over td { box-shadow: inset 0 2px 0 var(--accent); }
-.sr-reorder { display: inline-flex; flex-direction: column; gap: 1px; }
-.sr-reorder .icon-btn-sm { width: 20px; height: 16px; font-size: 0.5rem; }
 
 /* A6 — collapsible sidebar / icon rail */
 .sidebar .brand-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
@@ -1318,3 +1324,11 @@ tr.drag-over td { box-shadow: inset 0 2px 0 var(--accent); }
 }
 .chip-clear:hover { color: var(--accent); }
 .audit-entity-filter { flex: 0 0 auto; min-width: 150px; }
+.back-link {
+  display: inline-block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-decoration: none;
+  margin-bottom: 0.25rem;
+}
+.back-link:hover { color: var(--accent); }

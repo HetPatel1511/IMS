@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../shared/auth';
 import { api } from '../shared/api';
 import { setFormatConfig } from '../shared/format';
+import { useBreadcrumbLeaf } from '../shared/breadcrumb';
 import {
   getTheme,
   nextTheme,
@@ -62,7 +63,11 @@ export function AppLayout() {
     saveTheme(theme);
   }, [theme]);
 
-  const pageTitle = NAV.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))?.label ?? 'IMS';
+  const section = NAV.find((n) =>
+    n.end ? location.pathname === n.to : location.pathname.startsWith(n.to),
+  );
+  const pageTitle = section?.label ?? 'IMS';
+  const crumbLeaf = useBreadcrumbLeaf();
 
   // Configure app-wide number/locale formatting from org settings.
   // Gate on the access token too: `user` is restored synchronously from localStorage on
@@ -179,7 +184,7 @@ export function AppLayout() {
             </button>
             <button
               type="button"
-              className="collapse-rail-btn"
+              className="collapse-rail-btn rail-toggle"
               aria-label={railed ? 'Expand sidebar' : 'Collapse sidebar'}
               aria-pressed={railed}
               title={railed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -221,7 +226,15 @@ export function AppLayout() {
           <nav className="breadcrumbs" aria-label="Breadcrumb">
             <NavLink to="/">Dashboard</NavLink>
             <span aria-hidden className="crumb-sep">›</span>
-            <span aria-current="page">{pageTitle}</span>
+            {crumbLeaf && section ? (
+              <>
+                <NavLink to={section.to}>{pageTitle}</NavLink>
+                <span aria-hidden className="crumb-sep">›</span>
+                <span aria-current="page">{crumbLeaf}</span>
+              </>
+            ) : (
+              <span aria-current="page">{pageTitle}</span>
+            )}
           </nav>
         ) : null}
         <Outlet />

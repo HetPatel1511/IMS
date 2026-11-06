@@ -80,17 +80,32 @@ export function ItemsPage() {
   // Per-item movement history drawer (v3 A4): reuses the stock-transactions list,
   // filtered to one item, so edits can be explained by the quantity changes behind them.
   const [historyItem, setHistoryItem] = useState<{ id: string; label: string } | null>(null);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyRows, setHistoryRows] = useState<StockTx[]>([]);
   const historyTrapRef = useFocusTrap<HTMLDivElement>(Boolean(historyItem));
+  const HISTORY_PAGE_SIZE = 50;
   const historyQuery = useQuery({
-    queryKey: ['item-history', historyItem?.id],
+    queryKey: ['item-history', historyItem?.id, historyPage],
     enabled: Boolean(historyItem),
     queryFn: async () =>
-      (
-        await api<StockTx[]>(
-          `/stock-transactions?inventoryItemId=${historyItem!.id}&pageSize=50&sort=createdAt:desc`,
-        )
-      ).data,
+      (await api<StockTx[]>(
+        `/stock-transactions?inventoryItemId=${historyItem!.id}&pageSize=${HISTORY_PAGE_SIZE}&page=${historyPage}&sort=createdAt:desc`,
+      )) as ApiEnvelope<StockTx[]>,
   });
+  // Reset accumulation when the drawer opens on a different item.
+  useEffect(() => {
+    setHistoryPage(1);
+    setHistoryRows([]);
+  }, [historyItem?.id]);
+  // Append each fetched page (B2: older movements were previously unreachable).
+  useEffect(() => {
+    const d = historyQuery.data?.data;
+    if (!d) return;
+    setHistoryRows((prev) => (historyPage === 1 ? d : [...prev, ...d]));
+  }, [historyQuery.data, historyPage]);
+  const historyMeta = historyQuery.data?.meta ?? null;
+  const hasMoreHistory =
+    historyMeta?.totalPages != null && historyPage < historyMeta.totalPages;
   useEffect(() => {
     if (!historyItem) return;
     const onKey = (e: KeyboardEvent) => {
@@ -603,39 +618,56 @@ export function ItemsPage() {
                 ×
               </button>
             </div>
-            {historyQuery.isLoading ? (
+            {historyQuery.isLoading && historyRows.length === 0 ? (
               <p className="muted">Loading…</p>
-            ) : (historyQuery.data ?? []).length === 0 ? (
+            ) : historyRows.length === 0 ? (
               <p className="muted">No stock movements recorded for this item yet.</p>
             ) : (
-              <div className="table-wrap">
-                <table className="table cards" aria-label={`Movements for ${historyItem.label}`}>
-                  <thead>
-                    <tr>
-                      <th>When</th>
-                      <th>Type</th>
-                      <th>Qty</th>
-                      <th>After</th>
-                      <th>Party / reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(historyQuery.data ?? []).map((tx) => (
-                      <tr key={tx.id}>
-                        <td data-label="When">{new Date(tx.createdAt).toLocaleString()}</td>
-                        <td data-label="Type">{TX_LABEL[tx.type]}</td>
-                        <td className="num" data-label="Qty">{String(tx.quantity)}</td>
-                        <td className="num" data-label="After">{String(tx.quantityAfter)}</td>
-                        <td data-label="Party / reason">
-                          {tx.type === 'ADJUSTMENT'
-                            ? tx.notes || '—'
-                            : tx.supplier?.name ?? tx.buyer?.name ?? tx.notes ?? '—'}
-                        </td>
+              <>
+                <div className="table-wrap">
+                  <table className="table cards" aria-label={`Movements for ${historyItem.label}`}>
+                    <thead>
+                      <tr>
+                        <th>When</th>
+                        <th>Type</th>
+                        <th>Qty</th>
+                        <th>After</th>
+                        <th>Party / reason</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {historyRows.map((tx) => (
+                        <tr key={tx.id}>
+                          <td data-label="When">{new Date(tx.createdAt).toLocaleString()}</td>
+                          <td data-label="Type">{TX_LABEL[tx.type]}</td>
+                          <td className="num" data-label="Qty">{String(tx.quantity)}</td>
+                          <td className="num" data-label="After">{String(tx.quantityAfter)}</td>
+                          <td data-label="Party / reason">
+                            {tx.type === 'ADJUSTMENT'
+                              ? tx.notes || '—'
+                              : tx.supplier?.name ?? tx.buyer?.name ?? tx.notes ?? '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {hasMoreHistory ? (
+                  <div className="row spread pagination">
+                    <span className="muted">
+                      Showing {historyRows.length} of {historyMeta?.total}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn secondary"
+                      disabled={historyQuery.isFetching}
+                      onClick={() => setHistoryPage((p) => p + 1)}
+                    >
+                      {historyQuery.isFetching ? 'Loading…' : 'Load more'}
+                    </button>
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
         </div>

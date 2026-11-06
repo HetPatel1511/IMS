@@ -101,7 +101,7 @@ export function DashboardPage() {
                     </td>
                     <td className="num" data-label="Min">{formatNumber(it.minQuantity)}</td>
                     <td data-label="Actions">
-                      <Link className="btn secondary" to="/stock">
+                      <Link className="btn secondary" to={`/stock?buy=${it.id}`}>
                         Restock
                       </Link>
                     </td>

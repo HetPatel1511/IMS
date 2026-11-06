@@ -43,3 +43,7 @@ apps/web       React admin
 packages/shared  Field types + dynamic Zod validation
 database/schema.sql  Reference PostgreSQL DDL
 ```
+
+DEV
+admin@ims.local
+Admin123!

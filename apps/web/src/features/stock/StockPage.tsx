@@ -94,8 +94,10 @@ export function StockPage() {
     dir: 'desc',
   });
   const TX_PAGE_SIZE = 25;
+  // Deep-link from the dashboard "Restock" action (/stock?buy=<itemId>) preselects the item
+  // in the Buy form (mode defaults to 'buy').
   const [form, setForm] = useState({
-    inventoryItemId: '',
+    inventoryItemId: searchParams.get('buy') ?? '',
     partyId: '',
     quantity: '',
     unitPrice: '',

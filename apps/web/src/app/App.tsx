@@ -4,11 +4,13 @@ import { AuthProvider } from '../shared/auth';
 import { ToastProvider, emitToast } from '../shared/toast';
 import { toErrorMessage } from '../shared/api';
 import { ConfirmProvider } from '../shared/confirm';
+import { BreadcrumbProvider } from '../shared/breadcrumb';
 import '../shared/theme';
 import { AppLayout } from './AppLayout';
 import { LoginPage } from '../features/auth/LoginPage';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { InventoryTypesPage } from '../features/inventory-types/InventoryTypesPage';
+import { TypeSchemaPage } from '../features/inventory-types/TypeSchemaPage';
 import { ItemsPage } from '../features/inventory-items/ItemsPage';
 import { BuyersPage, SuppliersPage } from '../features/parties/PartiesPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
@@ -35,11 +37,13 @@ export function App() {
       <ConfirmProvider>
       <AuthProvider>
         <BrowserRouter>
+          <BreadcrumbProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route element={<AppLayout />}>
               <Route index element={<DashboardPage />} />
               <Route path="inventory-types" element={<InventoryTypesPage />} />
+              <Route path="inventory-types/:typeId" element={<TypeSchemaPage />} />
               <Route path="items" element={<ItemsPage />} />
               <Route path="stock" element={<StockPage />} />
               <Route path="suppliers" element={<SuppliersPage />} />
@@ -49,6 +53,7 @@ export function App() {
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </BreadcrumbProvider>
         </BrowserRouter>
       </AuthProvider>
       </ConfirmProvider>
